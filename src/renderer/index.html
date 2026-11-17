@@ -38,12 +38,6 @@
       <button id="undo" title="Undo (⌘ Z)" aria-label="Undo" disabled><svg viewBox="0 0 24 24"><path d="m9 6-5 5 5 5M4 11h10a6 6 0 0 1 6 6"/></svg></button>
       <button id="redo" title="Redo (⇧ ⌘ Z)" aria-label="Redo" disabled><svg viewBox="0 0 24 24"><path d="m15 6 5 5-5 5M20 11H10a6 6 0 0 0-6 6"/></svg></button>
     </nav>
-    <div class="top-right">
-      <button id="home" class="round floating" title="Back to start (⌘ 0)" aria-label="Back to start"><svg viewBox="0 0 24 24"><path d="M5 5h14M12 19V8m-5 5 5-5 5 5"/></svg></button>
-      <button id="fullscreen" class="round floating" title="Full screen (⇧ ⌘ F)" aria-label="Toggle full screen"><svg viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/></svg></button>
-    </div>
-    <div class="signature" aria-label="ScrollMind"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#153d64"/><path d="M23 9H13a4 4 0 0 0 0 8h6a3 3 0 0 1 0 6H9M22 6v6M10 20v6" fill="none" stroke="#f6efdf" stroke-width="2.5" stroke-linecap="round"/></svg><span>ScrollMind</span></div>
-    <div id="footer"><span id="selection-hint"></span><span id="status" role="status" aria-live="polite">Opening…</span><button id="help-open" aria-label="Help and Wacom controls" title="Controls (?)">?</button></div>
   </div>
   <aside id="sidebar" hidden aria-label="Sections and paper">
     <header><div><p class="eyebrow">YOUR SCROLL</p><h1>Find your place.</h1></div><button id="sidebar-close" class="round" aria-label="Close sidebar">×</button></header>
@@ -59,10 +53,12 @@
         <label for="paper-pattern">Ruling</label><select id="paper-pattern"><option value="plain">Plain</option><option value="dots">Dot grid</option><option value="ruled">Ruled</option><option value="grid">Square grid</option></select>
       </section>
       <section class="display-settings"><label for="display-select">Writing screen</label><select id="display-select" aria-label="Writing screen"></select></section>
-      <div class="sidebar-links"><button id="data-folder">Open saved notebook ↗</button><button id="controls-link">Keyboard & Wacom controls</button></div>
+      <div class="sidebar-links"><button id="home" title="Back to start (⌘ 0)">Back to start</button><button id="fullscreen" title="Full screen (⇧ ⌘ F)">Toggle full screen</button><button id="data-folder">Open saved notebook ↗</button><button id="controls-link">Keyboard & Wacom controls</button></div>
+      <div class="sidebar-status"><span id="selection-hint"></span><span id="status" role="status" aria-live="polite">Opening…</span></div>
       <p class="quiet small" id="version">ScrollMind · First draft</p>
     </div>
   </aside>
+  <button id="save-alert" role="alert" aria-live="assertive" hidden></button>
   <div id="context-menu" role="menu" hidden><button data-command="cut" role="menuitem">Cut <kbd>⌘ X</kbd></button><button data-command="copy" role="menuitem">Copy <kbd>⌘ C</kbd></button><button data-command="paste" role="menuitem">Paste <kbd>⌘ V</kbd></button><button data-command="duplicate" role="menuitem">Duplicate <kbd>⌘ D</kbd></button><button data-command="delete" role="menuitem">Delete <kbd>⌫</kbd></button></div>
   <dialog id="help"><button id="help-close" class="round" aria-label="Close help">×</button><p class="eyebrow">A LITTLE ROOM TO THINK</p><h1>Just you and the page.</h1><p class="help-intro">Write with the pen. Arrange with the mouse. Keep going in either direction.</p><div class="help-columns"><section><h2>Write & move</h2><dl><dt>Pen / Eraser</dt><dd><kbd>B</kbd> / <kbd>E</kbd></dd><dt>Rectangle selection</dt><dd><kbd>V</kbd></dd><dt>Scroll</dt><dd>Wheel or <kbd>Space</kbd> + drag</dd><dt>Move selected strokes</dt><dd>Drag inside the box</dd><dt>Resize selection</dt><dd>Drag a corner · <kbd>⇧</kbd> keeps shape</dd><dt>Nudge</dt><dd>Arrow keys · <kbd>⇧</kbd> for 10px</dd><dt>Copy / Cut / Paste</dt><dd><kbd>⌘ C</kbd> / <kbd>⌘ X</kbd> / <kbd>⌘ V</kbd></dd><dt>Duplicate / Select all</dt><dd><kbd>⌘ D</kbd> / <kbd>⌘ A</kbd></dd><dt>Undo / Redo</dt><dd><kbd>⌘ Z</kbd> / <kbd>⇧ ⌘ Z</kbd></dd></dl></section><section><h2>Your Wacom</h2><p>The tip writes with pressure. For a pen with two side buttons, sensible Wacom driver assignments are:</p><dl><dt>Lower side button</dt><dd>Right click → hold to erase</dd><dt>Upper side button</dt><dd>Middle click → hold to scroll</dd><dt>ExpressKeys, if available</dt><dd>Undo · Redo · V · Tab</dd></dl><p class="quiet">Button names follow the assignments in your Wacom driver. The app doesn’t change those assignments.</p><h2>Give yourself space</h2><dl><dt>Sidebar / Toolbar</dt><dd><kbd>⌘ /</kbd> / <kbd>Tab</kbd></dd><dt>Back to start</dt><dd><kbd>⌘ 0</kbd></dd><dt>Full screen</dt><dd><kbd>⇧ ⌘ F</kbd> · <kbd>Esc</kbd> to leave</dd><dt>Add marker / Page break</dt><dd><kbd>⌘ ⇧ M</kbd> / <kbd>⌘ Enter</kbd></dd></dl></section></div><p class="help-foot">Saved automatically in Documents / ScrollMind. No account. No cloud.</p></dialog>
   <script type="module" src="app.mjs"></script>

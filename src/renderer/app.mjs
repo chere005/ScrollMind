@@ -19,7 +19,12 @@ const tones = {
   night: { background: '#172c40', line: '#47637b', marker: '#89a9c5' },
 };
 function snapshot() { return notebook.snapshot({ offsetY }, settings); }
-function message(text, error = false) { status.textContent = text; status.classList.toggle('error', error); }
+function message(text, error = false) {
+  status.textContent = text;
+  status.classList.toggle('error', error);
+  $('#save-alert').hidden = !error;
+  $('#save-alert').textContent = error ? text : '';
+}
 function changed() {
   revision++; message('Saving…'); clearTimeout(saveTimer);
   saveTimer = setTimeout(() => flushSave().catch(() => {}), 450);
@@ -286,7 +291,7 @@ document.querySelectorAll('[data-tool]').forEach(button => button.addEventListen
 document.querySelectorAll('[data-color]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.color = button.dataset.color; setTool('pen'); changed(); }));
 document.querySelectorAll('[data-width]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.width = Number(button.dataset.width); changed(); }));
 for (const name of ['undo', 'redo', 'home', 'fullscreen']) $(`#${name}`).addEventListener('click', () => safely(name));
-$('#help-open').addEventListener('click', () => safely('help')); $('#controls-link').addEventListener('click', () => safely('help')); $('#help-close').addEventListener('click', () => $('#help').close());
+$('#controls-link').addEventListener('click', () => safely('help')); $('#help-close').addEventListener('click', () => $('#help').close());
 $('#context-menu').addEventListener('click', event => { const button = event.target.closest('[data-command]'); if (button) { safely(button.dataset.command); $('#context-menu').hidden = true; } });
 overlay.addEventListener('contextmenu', event => {
   event.preventDefault(); if (!loaded || event.pointerType === 'pen') return; finishGesture(); const menu = $('#context-menu'); menu.hidden = false;
@@ -349,6 +354,7 @@ $('#paper-tone').addEventListener('change', event => { finishGesture(); settings
 $('#display-select').addEventListener('change', async event => { try { finishGesture(); await bridge.moveToDisplay(event.target.value); } catch (error) { message(error.message, true); } });
 $('#data-folder').addEventListener('click', () => bridge.openDataFolder().catch(error => message(error.message, true)));
 status.addEventListener('click', () => { if (status.classList.contains('error')) bridge.openDataFolder(); }); bridge.onCommand(safely);
+$('#save-alert').addEventListener('click', () => toggleSidebar(true));
 bridge.onBeforeClose(async () => { try { await initialization; if (!loadError) { finishGesture(); await flushSave(); } await bridge.readyToClose(); } catch (error) { await bridge.readyToClose({ error: error.message }); } });
 window.addEventListener('pagehide', () => { finishGesture(); flushSave().catch(() => {}); }); window.addEventListener('error', event => message(event.message || 'Something needs attention', true));
 async function initialize() {
