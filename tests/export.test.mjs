@@ -62,9 +62,10 @@ test('paper colors, continuous world-space ruling, and safe marker text are pres
   assert.match(svg, /<title>A &amp; B<\/title>/);
   const parchment = exportSVG(snapshot([], [], { paperTone: 'parchment', paper: 'dots' }));
   assert.match(parchment, /fill="#f1e9d8"/);
-  assert.match(parchment, /scroll-texture/);
+  assert.doesNotMatch(parchment, /scroll-texture|#82735b|#fffdf5/);
+  assert.match(exportSVG(snapshot([], [], { paperTone: 'parchment', paper: 'plain' })), /scroll-texture/);
   assert.match(parchment, /scroll-ruling/);
-  assert.match(parchment, /r="0\.8" fill="[^"]+" opacity="0\.8"/);
+  assert.match(parchment, /r="1" fill="#9f947d" opacity="0\.9"/);
   const outerBreak = exportSVG(snapshot([stroke('near', [[0, 0]])], [{ id: 'outer', y: 1000, kind: 'page-break', label: 'Later page' }]));
   assert.match(outerBreak, /data-marker-id="outer"/);
 });

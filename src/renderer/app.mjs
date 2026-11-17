@@ -29,10 +29,10 @@ const penControls = createPenControls({
   focusCanvas() { overlay.focus({ preventScroll: true }); },
 });
 const tones = {
-  ivory: { background: '#faf8f2', line: '#c5c6bc', marker: '#71879a' },
-  parchment: { background: '#f1e9d8', line: '#b9ae98', marker: '#8a7e69' },
-  white: { background: '#ffffff', line: '#c4cdd5', marker: '#71879a' },
-  night: { background: '#172c40', line: '#47637b', marker: '#89a9c5' },
+  ivory: { background: '#faf8f2', line: '#c5c6bc', dot: '#a1a49a', marker: '#71879a' },
+  parchment: { background: '#f1e9d8', line: '#b9ae98', dot: '#9f947d', marker: '#8a7e69' },
+  white: { background: '#ffffff', line: '#c4cdd5', dot: '#9da9b2', marker: '#71879a' },
+  night: { background: '#172c40', line: '#47637b', dot: '#6787a3', marker: '#89a9c5' },
 };
 function snapshot() { return scroll.snapshot({ offsetY }, settings); }
 function message(text, error = false) {
@@ -108,12 +108,12 @@ function paperTexture() {
 function drawPaper() {
   const tone = tones[settings.paperTone] || tones.ivory;
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.fillStyle = tone.background; ctx.fillRect(0, 0, width, height);
-  if (settings.paperTone === 'parchment') { ctx.save(); ctx.translate(0, -offsetY % 128); ctx.fillStyle = paperTexture(); ctx.fillRect(0, -128, width, height + 256); ctx.restore(); }
+  if (settings.paperTone === 'parchment' && settings.paper !== 'dots') { ctx.save(); ctx.translate(0, -offsetY % 128); ctx.fillStyle = paperTexture(); ctx.fillRect(0, -128, width, height + 256); ctx.restore(); }
   ctx.strokeStyle = tone.line; ctx.fillStyle = tone.line; ctx.lineWidth = .65; ctx.globalAlpha = .5;
   const gap = settings.paper === 'ruled' ? 32 : 24, first = Math.floor(offsetY / gap) * gap - offsetY;
   if (settings.paper === 'dots') {
-    ctx.globalAlpha = .8; ctx.beginPath();
-    for (let y = first; y < height; y += gap) for (let x = 16; x < width; x += gap) { ctx.moveTo(x + .8, y); ctx.arc(x, y, .8, 0, Math.PI * 2); }
+    ctx.fillStyle = tone.dot; ctx.globalAlpha = .9; ctx.beginPath();
+    for (let y = first; y < height; y += gap) for (let x = 16; x < width; x += gap) { ctx.moveTo(x + 1, y); ctx.arc(x, y, 1, 0, Math.PI * 2); }
     ctx.fill();
   } else if (settings.paper === 'ruled' || settings.paper === 'grid') {
     ctx.beginPath(); for (let y = first; y < height; y += gap) { ctx.moveTo(0, y); ctx.lineTo(width, y); }

@@ -308,7 +308,28 @@ test('optional sidebar styles paper and saves sections, page breaks and writing 
   await page.locator('#sidebar-toggle').click();
   await expect(page.locator('#sidebar')).toBeVisible();
   await page.locator('#paper-tone').selectOption('parchment');
-  await page.locator('#paper-pattern').selectOption('ruled');
+  await page.locator('#paper-pattern').selectOption('dots');
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const dotPaper = await page.evaluate(() => {
+    const canvas = document.querySelector('#canvas'), paint = canvas.getContext('2d');
+    const ratio = canvas.width / innerWidth, left = Math.round(330 * ratio), top = Math.round(180 * ratio);
+    const side = Math.round(144 * ratio), data = paint.getImageData(left, top, side, side).data;
+    const paper = [241, 233, 216];
+    let offGridPixels = 0, dotPixels = 0, strongestContrast = 0;
+    for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) {
+      const index = (y * side + x) * 4;
+      const contrast = Math.max(...paper.map((channel, c) => Math.abs(channel - data[index + c])));
+      if (contrast <= 2) continue;
+      const worldX = (left + x + 0.5) / ratio, worldY = (top + y + 0.5) / ratio;
+      const gridX = 16 + Math.round((worldX - 16) / 24) * 24, gridY = Math.round(worldY / 24) * 24;
+      if (Math.hypot(worldX - gridX, worldY - gridY) > 2) offGridPixels++;
+      else { dotPixels++; strongestContrast = Math.max(strongestContrast, contrast); }
+    }
+    return { offGridPixels, dotPixels, strongestContrast };
+  });
+  expect(dotPaper.offGridPixels).toBe(0);
+  expect(dotPaper.dotPixels).toBeGreaterThan(0);
+  expect(dotPaper.strongestContrast).toBeGreaterThanOrEqual(40);
   await page.locator('#add-section').click();
   await page.locator('#add-marker').click();
   await page.locator('#add-page-break').click();
@@ -343,14 +364,14 @@ test('optional sidebar styles paper and saves sections, page breaks and writing 
   expect(saved.strokes).toHaveLength(1);
   expect(saved.markers).toEqual(expected.markers);
   expect(saved.settings.paperTone).toBe('parchment');
-  expect(saved.settings.paper).toBe('ruled');
+  expect(saved.settings.paper).toBe('dots');
 
   await launch();
   const reopened = await snapshot();
   expect(reopened.strokes).toEqual(expected.strokes);
   expect(reopened.markers).toEqual(expected.markers);
   expect(reopened.settings.paperTone).toBe('parchment');
-  expect(reopened.settings.paper).toBe('ruled');
+  expect(reopened.settings.paper).toBe('dots');
   await expect(page.locator('#sidebar')).toBeHidden();
 });
 

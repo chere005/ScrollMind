@@ -7,10 +7,10 @@ const MAX_EXPORT_CHARACTERS = 64 * 1024 * 1024;
 const MAX_EXPORT_SEGMENTS = 1_000_000;
 const LETTER = Object.freeze({ width: 816, height: 1056, margin: 48, innerWidth: 720, innerHeight: 960 });
 const TONES = Object.freeze({
-  ivory: { background: '#faf8f2', line: '#c5c6bc', marker: '#71879a' },
-  parchment: { background: '#f1e9d8', line: '#b9ae98', marker: '#8a7e69' },
-  white: { background: '#ffffff', line: '#c4cdd5', marker: '#71879a' },
-  night: { background: '#172c40', line: '#47637b', marker: '#89a9c5' },
+  ivory: { background: '#faf8f2', line: '#c5c6bc', dot: '#a1a49a', marker: '#71879a' },
+  parchment: { background: '#f1e9d8', line: '#b9ae98', dot: '#9f947d', marker: '#8a7e69' },
+  white: { background: '#ffffff', line: '#c4cdd5', dot: '#9da9b2', marker: '#71879a' },
+  night: { background: '#172c40', line: '#47637b', dot: '#6787a3', marker: '#89a9c5' },
 });
 
 const n = value => String(Number(value.toFixed(4)));
@@ -88,13 +88,13 @@ function definitions(settings, prefix, clipping) {
   const tone = TONES[settings.paperTone];
   let content = '';
   if (settings.paper === 'dots') {
-    content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="4" y="-12" width="24" height="24"><circle cx="12" cy="12" r="0.8" fill="${tone.line}" opacity="0.8"/></pattern>`;
+    content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="4" y="-12" width="24" height="24"><circle cx="12" cy="12" r="1" fill="${tone.dot}" opacity="0.9"/></pattern>`;
   } else if (settings.paper === 'ruled') {
     content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="0" y="-16" width="1" height="32"><path d="M0 16H1" fill="none" stroke="${tone.line}" stroke-width="0.65" opacity="0.5"/></pattern>`;
   } else if (settings.paper === 'grid') {
     content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="4" y="-12" width="24" height="24"><path d="M0 12H24M12 0V24" fill="none" stroke="${tone.line}" stroke-width="0.65" opacity="0.5"/></pattern>`;
   }
-  if (settings.paperTone === 'parchment') content += `<pattern id="${prefix}-texture" patternUnits="userSpaceOnUse" width="128" height="128">${parchmentPaths()}</pattern>`;
+  if (settings.paperTone === 'parchment' && settings.paper !== 'dots') content += `<pattern id="${prefix}-texture" patternUnits="userSpaceOnUse" width="128" height="128">${parchmentPaths()}</pattern>`;
   if (clipping) content += `<clipPath id="${prefix}-clip"><rect x="${n(clipping.x)}" y="${n(clipping.y)}" width="${n(clipping.width)}" height="${n(clipping.height)}"/></clipPath>`;
   return `<defs>${content}</defs>`;
 }
@@ -102,7 +102,7 @@ function definitions(settings, prefix, clipping) {
 function paper(settings, rect, prefix) {
   const attributes = `x="${n(rect.x)}" y="${n(rect.y)}" width="${n(rect.width)}" height="${n(rect.height)}"`;
   let content = `<rect ${attributes} fill="${TONES[settings.paperTone].background}"/>`;
-  if (settings.paperTone === 'parchment') content += `<rect ${attributes} fill="url(#${prefix}-texture)"/>`;
+  if (settings.paperTone === 'parchment' && settings.paper !== 'dots') content += `<rect ${attributes} fill="url(#${prefix}-texture)"/>`;
   if (settings.paper !== 'plain') content += `<rect ${attributes} fill="url(#${prefix}-ruling)"/>`;
   return content;
 }
