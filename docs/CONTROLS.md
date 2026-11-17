@@ -1,75 +1,71 @@
 # Controls
 
+## Pen controls
+
+Hover over the small circle at the top for 200 ms to expand the controls in place. Small slips outside keep them open; moving farther away closes them after half a second. Clicking or focusing the circle opens them immediately.
+
+Choose **Pen**, **Pencil**, **Fountain**, or **Marker**, then a width: **Fine**, **Medium**, **Bold**, or **Broad**. Pressure changes the width of new strokes. Existing writing keeps its original style.
+
+The eight swatches are Black, Graphite, Blue, Green, Red, Orange, Purple, and White. The color wheel adds hue, saturation, brightness, and six-digit hex input. Your pen type, width, and color save with the scroll.
+
+The shape dropdown offers Line, Arrow, Rectangle, Ellipse, and Triangle. Choose one and drag on the page. Hold Shift for straight angles, squares, circles, or an equilateral triangle. Shapes can be selected and edited like handwriting.
+
+## Mouse and keyboard
+
 | Action | Control |
 | --- | --- |
-| Write | Pen tip; pressure changes ink width |
-| Pen | B |
-| Eraser | E |
-| Rectangular selection | V |
-| Hand | H |
-| Move selected writing | Drag the selection |
-| Resize selected writing | Drag a corner; hold Shift to keep its shape |
-| Select multiple strokes | Drag a rectangle across the writing |
-| Copy, cut, paste | ⌘C, ⌘X, ⌘V |
-| Duplicate selection | ⌘D |
-| Select all | ⌘A |
-| Delete selection | Delete or Backspace |
-| Nudge selection | Arrow keys; Shift moves farther |
-| Undo, redo | ⌘Z, ⌘⇧Z |
-| Pen undo, redo | Double-click the lower pen button or scrolling button while hovering |
+| Pen / Eraser / Rectangle selection / Hand | B / E / V / H |
 | Scroll vertically | Mouse wheel or trackpad |
-| Pan vertically | Space + drag, or middle-button drag |
-| Return to starting point | ⌘0 |
-| Hide or show toolbar | Tab |
+| Pan vertically | Space + drag or middle-button drag |
+| Select handwriting | Drag a rectangle across strokes |
+| Move selection | Drag inside its box |
+| Resize selection | Drag a corner; Shift keeps its shape |
+| Nudge selection | Arrow keys; Shift moves 10 units |
+| Copy / Cut / Paste | ⌘C / ⌘X / ⌘V |
+| Duplicate / Select all | ⌘D / ⌘A |
+| Delete selection | Delete or Backspace |
+| Undo / Redo | ⌘Z / ⌘⇧Z |
+| Sidebar / Pen controls | ⌘/ / Tab |
+| Return to start | ⌘0 |
 | Full screen | ⌘⇧F or F11 |
-| Clear selection, then leave full screen | Escape |
-| Close current scroll | ⌘W |
-| Quit | ⌘Q |
+| Clear selection or dismiss controls | Escape |
+| Close current scroll / Quit | ⌘W / ⌘Q |
 
-The selection tool uses a rectangle by default. A rectangle that crosses a stroke selects the whole stroke. Moving and copying preserve pressure and stroke shape. Each complete pen stroke, erase gesture, or selection move can be undone.
-
-## Pen controls, shapes and colors
-
-The small circle at the top of the page expands in place after a 200 ms hover. Choose a tool, color, or pen size from the controls that cover it. Small slips outside the controls keep them open; moving farther away closes them after half a second. Clicking or focusing the circle opens them immediately. A focused brightness slider keeps the color picker available while you adjust it.
-
-The shape dropdown offers **Line**, **Arrow**, **Rectangle**, **Ellipse**, and **Triangle**. Choose a shape, then drag in either direction on the page to draw it. Hold Shift for straight angles, squares, circles, or an equilateral triangle. Shapes are ordinary editable strokes: select, move, copy, resize, or undo them with the same controls as handwriting.
-
-The **Pen type** dropdown offers **Pen**, **Pencil**, **Fountain**, and **Marker**. Four widths run from fine through extra broad. Pen pressure produces a pronounced range from light, fine marks to heavy strokes; the selected type and width save with the scroll. Existing writing keeps its original appearance when you change tools.
-
-Choose from eight quick color swatches in one row, or open the color wheel to choose hue and saturation, adjust brightness with the slider, or enter a six-digit hex color. Your chosen color saves with the scroll and applies to new ink and shapes.
-
-## Paper and navigation
-
-The sidebar starts hidden. Its toggle opens paper settings and a list of places on the sheet. Paper can be plain, dotted, ruled, or a square grid, with white, ivory, parchment, and dark backgrounds.
-
-Use **Section**, **Marker**, or **Page break** to add a navigation point at the middle of your view. Sections give larger parts of the scroll a name; markers bookmark a place; page breaks mark boundaries without limiting the continuous canvas. Edit an item's name directly in the sidebar and press Enter to finish. Its symbol jumps to the location; its × removes it. Undo also restores removed navigation points. Paper settings and navigation points save with the scroll.
+A selection rectangle selects complete strokes that it crosses. Each drawing, erase drag, shape, or selection move is one undo action. Escape leaves full screen once selections and open controls are dismissed.
 
 ## Wacom buttons
 
-The app responds to standard mouse-button actions from the pen driver. A useful app-specific Wacom profile assigns the lower pen button to **Right Click**: hold the button, then touch or drag the pen tip across strokes to delete them. A single button click does nothing. Each continuous erase drag is one undo action; lifting the tip ends it. Pressing the button during an existing pen stroke does not begin erasing until you lift and touch down again. Double-click the lower button while hovering to undo. Assign the upper pen button to **Middle Click** for vertical panning; double-click it while hovering to redo. Erasing and dragging to scroll do not count as double-click commands. The toolbar eraser and a pen's rear eraser also erase continuously while in contact with the page.
+ScrollMind responds to the standard mouse-button actions assigned in the Wacom driver. Useful app-specific assignments are:
 
-For tablets with ExpressKeys, useful assignments are **⌘Z**, **⌘⇧Z**, **B**, **E**, **V**, **H**, and **Tab**. A touch strip or ring assigned to vertical scrolling moves along the sheet. ScrollMind handles these events; it does not modify the Wacom driver's button assignments.
+| Pen button | Assignment and behavior |
+| --- | --- |
+| Lower button | **Right Click:** hold, then touch or drag across strokes to erase; double-click while hovering to undo |
+| Upper button | **Middle Click:** hold and drag to scroll; double-click while hovering to redo |
 
-## Screens and scrolls
+A single button click does nothing. Pressing the erase button during an existing stroke does not erase until you lift and touch down again. Each erase drag ends when the tip lifts and undoes together. Erasing and scrolling do not count as double-click commands. The toolbar eraser and a pen's rear eraser also erase continuously on contact.
 
-ScrollMind prefers a display with Wacom or Cintiq in its name. Other screens can be selected from its display control. When macOS mirrors screens, they show the same app; independent positioning requires an extended desktop.
+Useful ExpressKey assignments are ⌘Z, ⌘⇧Z, B, E, V, H, and Tab. A ring or strip assigned to vertical scrolling moves along the page. ScrollMind does not change the driver's assignments.
 
-The sidebar lists your open scrolls. **New Scroll** creates another; select a scroll to switch, rename it with its pencil button, or close it with ×. Closed scrolls remain saved and can be reopened from **Other scrolls**. Each open scroll keeps its own undo history during the session. The app restores the workspace and active scroll after restarting. New scrolls use the first available name: Scroll, Scroll 1, Scroll 2, and so on. Deleting a scroll frees its name; closing it keeps the name reserved.
+## Paper and navigation
 
-The trash button deletes a scroll from the workspace and **Other scrolls**, keeping a recoverable copy in `Documents/ScrollMind/Deleted Scrolls`; other scrolls and any original imported `.sm` file remain unchanged.
+Open the sidebar for plain, dotted, ruled, or square-grid paper in ivory, parchment, white, or midnight blue. Dotted paper uses one regular grid without parchment grain.
 
-**Clear Scroll** removes every stroke, section, marker, and page break from the current scroll in one action. Undo restores all of them together. Paper settings and other open scrolls stay as they were.
+**Section**, **Marker**, and **Page break** add navigation points at the middle of the view. Edit their names directly and press Enter to finish. Their symbols jump to the saved place; × removes them. Undo restores removed points. Page breaks also control PDF pagination.
 
-The original scroll is `~/Documents/ScrollMind/scroll.sm`; additional scrolls live in `Scrolls/<id>/scroll.sm` under that folder. Each has a recovery snapshot named `scroll.backup.sm`, refreshed at startup, first writing, every five minutes, and clean close. These are self-contained SQLite files. The app saves changes automatically and waits for the final save before quitting. A recovery error appears if neither saved file can be read; damaged files are preserved. Earlier JSON saves migrate automatically, preserving the original JSON files.
+The screen selector chooses the writing display. Mirrored macOS displays show the same app; independent screen placement requires an extended desktop.
 
-## Open and export
+## Manage and export scrolls
 
-Open the sidebar or File menu to save a copy or open another scroll.
+**New Scroll** adds another scroll. Select a name to switch, use its pencil button to rename, or × to close. Closed scrolls remain in **Other scrolls**. Each open scroll keeps its own undo history during the session, and the workspace returns after restart.
+
+The trash button deletes a scroll from the workspace and keeps a recoverable copy in `~/Documents/ScrollMind/Deleted Scrolls`. **Clear Scroll** removes all writing, sections, markers, and page breaks from the current scroll in one undoable action, keeping paper settings and other scrolls.
+
+**Open Scroll**, or opening an .sm file with ScrollMind, adds an editable working copy and preserves its source. **Export Scroll** offers:
 
 | Format | Contents |
 | --- | --- |
-| `.sm` | Editable scroll, including stroke points, pressure, pen types, colors, paper settings, sections, and markers |
-| `.svg` | Vector artwork for the continuous scroll, without app controls |
-| `.pdf` | Paginated document for sharing or printing, with manual page breaks respected |
+| .sm | Editable strokes, pressure, pen styles, paper settings, and navigation points |
+| SVG | Vector artwork for the continuous scroll |
+| PDF | Paginated artwork with manual page breaks |
 
-**Export Scroll** writes a copy in the selected format. **Open Scroll** adds an editable working copy of a `.sm` file to the open scrolls, preserving the chosen file and every existing scroll. Canceling either file dialog keeps the workspace unchanged.
+Scrolls save automatically before switching or quitting. See the [native format reference](SCROLL-FORMAT.md) for files, backups, and recovery.

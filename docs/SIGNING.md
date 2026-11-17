@@ -1,13 +1,40 @@
 # macOS distribution
 
-ScrollMind uses electron-builder 26's flat `mac` signing configuration. Both app and helper entitlements grant only V8's `allow-jit`; Hardened Runtime and Developer ID signing are required. The release tool verifies nested signatures and the packaged version before uploading.
+The public macOS archive is Developer ID signed with Hardened Runtime. **The 1.0.0 release is not notarized.**
 
-Notarization is currently deferred. `node tools/release-mac.mjs` builds and verifies the Developer ID signed app and creates `dist/ScrollMind-<version>-<arch>-signed.zip`. It does not contact Apple's notarization service or claim notarization. `--sign-only` is an explicit alias for this default. Run the repository preflight before starting the release tool; `npm run release:mac` includes that preflight. `--check` validates signing configuration without building or submitting.
+## Build a signed release
 
-When notarization is explicitly requested, `--notarize` builds and submits the ZIP to Apple, waits for `Accepted`, staples the ticket, verifies Gatekeeper acceptance, and creates `dist/ScrollMind-<version>-<arch>.zip`. `--check --notarize` validates notarization authentication without submitting. `--resume` explicitly opts into notarizing an existing signed build or continuing its persisted submission without rebuilding; an existing submission is not uploaded again. `--verify` independently checks the stapled app.
+A release build requires an Apple silicon Mac, Xcode command-line tools, installed npm dependencies, and a Developer ID Application certificate with its private key in the signing keychain. Configure `build.mac.identity` in `package.json` with the certificate's identity qualifier, without the `Developer ID Application:` prefix. Keep credentials and private keys outside the repository.
 
-Authentication uses an existing Keychain profile named by `APPLE_KEYCHAIN_PROFILE` or `SCROLLMIND_NOTARY_PROFILE`; `APPLE_KEYCHAIN` can select a custom keychain. Alternatively, `APPLE_API_KEY` must name an existing private-key file, accompanied by `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. Individual API keys require explicit `SCROLLMIND_NOTARY_INDIVIDUAL_KEY=1` instead of an issuer. `SCROLLMIND_NOTARY_KEY`, `SCROLLMIND_NOTARY_KEY_ID`, and `SCROLLMIND_NOTARY_ISSUER` are equivalent names. Credentials and private key contents are never written to the repository or release reports.
+`npm run release:mac` runs the preflight checks, builds the arm64 macOS app, verifies app and nested signatures, checks the packaged version and entitlements, and creates:
 
-ZIP creation uses a temporary file, verifies every entry's CRC, and atomically replaces the destination after syncing its contents. The tool saves signing/submission metadata in `dist/*-notarization.json`, including the uploaded archive hash so resuming cannot silently validate a different build. Signed-only reports say `Signed; not notarized`. Apple rejection logs remain in `dist`; a notarized release report records `Accepted`, stapling, Gatekeeper verification, and the distributable ZIP hash. No GitHub release is created.
+```text
+dist/ScrollMind-<version>-<arch>-signed.zip
+```
 
-References: [electron-builder 26 macOS configuration](https://www.electron.build/v26/docs/api/app-builder-lib.interface.macconfiguration/), [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow), [Apple Hardened Runtime](https://developer.apple.com/documentation/security/hardened-runtime).
+The archive is CRC checked and replaced atomically. A local report records its SHA-256 hash and signing status. The tool creates local artifacts; publishing a GitHub release is a separate step.
+
+| Command | Purpose |
+| --- | --- |
+| `node tools/release-mac.mjs --check` | Validate signing configuration without building |
+| `node tools/release-mac.mjs --sign-only` | Build and verify a signed archive after preflight |
+| `npm run build:mac` | Build the signed application bundle without the release archive checks |
+
+Both app and helper entitlements allow V8 JIT. The release verifier rejects unsigned-executable-memory and disabled-library-validation entitlements.
+
+## Optional notarization
+
+Notarization is an explicit release choice. The default release command does not submit anything to Apple.
+
+Use an existing Keychain profile through `APPLE_KEYCHAIN_PROFILE`, optionally selecting its keychain with `APPLE_KEYCHAIN`. Alternatively, set `APPLE_API_KEY` to a private-key file path, with `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. Individual API keys use `SCROLLMIND_NOTARY_INDIVIDUAL_KEY=1` instead of an issuer.
+
+| Command | Purpose |
+| --- | --- |
+| `node tools/release-mac.mjs --check --notarize` | Verify notarization authentication without submitting |
+| `node tools/release-mac.mjs --notarize` | Build, submit, await acceptance, staple, and verify Gatekeeper acceptance |
+| `node tools/release-mac.mjs --resume` | Continue notarization from the matching saved archive and submission |
+| `node tools/release-mac.mjs --verify` | Verify an existing stapled application |
+
+A successful notarized build creates `dist/ScrollMind-<version>-<arch>.zip`. Submission records and rejection logs remain under `dist`; they are local release records, not public release notes. Saved archive hashes prevent resuming against a different build.
+
+References: [Apple notarization](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow), [Hardened Runtime](https://developer.apple.com/documentation/security/hardened-runtime), [electron-builder macOS configuration](https://www.electron.build/v26/docs/api/app-builder-lib.interface.macconfiguration/).

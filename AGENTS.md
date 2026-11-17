@@ -1,9 +1,13 @@
-- Keep the drawing model platform independent in src/core and OS integration in src/main.
-- Run npm run preflight before merging or pushing; UI tests must run with hidden windows.
-- Keep scrolls in ~/Documents/ScrollMind; use incremental SQLite transactions and flush before closing.
-- Do not enable GitHub workflows until the same checks pass locally.
-- Use the suite’s connected initials icon; keep branding and secondary controls off the writing canvas.
-- Save scrolls separately and restore open tabs; clearing the current scroll must be undoable and leave others untouched.
-- Deleting a scroll must remove it from workspace lists and preserve a recoverable copy without touching other scrolls.
+- Support macOS 13+ on Apple silicon; keep portable drawing behavior in src/core and OS integration in src/main.
+- Work on a branch, stage explicit paths, and run npm run preflight before merging or pushing; finish checked releases on main.
+- Desktop checks must use hidden windows and disposable data; serialize heavy builds and preserve the running app's final save before replacing it.
+- Keep scrolls in ~/Documents/ScrollMind with incremental SQLite saves, recovery snapshots, and a flush before closing or switching.
+- Preserve legacy ink appearance and carry pen type, pressure, ordering, and navigation through editing, clipboard, undo, native files, SVG, and PDF.
+- Save scrolls separately and restore open tabs; clearing a scroll is undoable, while deleting it retains a recoverable copy and leaves other scrolls untouched.
 - Reuse the first free default name (Scroll, Scroll 1, …); closed scrolls reserve names and deleted scrolls do not.
-- Preserve legacy ink appearance and carry pen styles through native files, editing, clipboard, SVG, and PDF.
+- Keep the writing canvas free of branding; secondary controls collapse into the launcher and hidden sidebar, and dotted paper uses one clear grid without speckled textures.
+- Preserve Wacom mappings: lower button plus fresh tip contact erases on tap or drag, hover double-click undoes, and the middle button pans or hover double-clicks to redo.
+- This repository is public: keep credentials, private keys, personal scrolls, local machine configuration, build artifacts, and scratch notes out of Git.
+- Build releases with npm run release:mac -- --sign-only, verify the Developer ID signature and installed app, then tag and push checked main and publish the signed ZIP with its SHA-256 checksum.
+- Release versions bump the minor component unless a version is explicitly requested; never claim notarization without Apple's acceptance and a validated stapled ticket.
+- Keep README.md, docs/CONTROLS.md, docs/SCROLL-FORMAT.md, and docs/SIGNING.md current; consolidate guidance there instead of accumulating dated notes.

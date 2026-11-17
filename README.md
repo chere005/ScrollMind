@@ -1,21 +1,37 @@
 # ScrollMind
 
-A quiet, infinite sheet for a pen display. The macOS app opens full screen on a connected Wacom display, with pressure-sensitive ink, a small control circle, and an endless page above and below where you started. Hover over the circle for a moment to expand the pen controls in place; a forgiving margin keeps them open while you choose, and they fold away when you return to the page.
+Full-screen handwriting for Wacom pen displays, with an infinite vertical page. Write with a pressure-sensitive pen, then arrange your strokes with a mouse and keyboard. ScrollMind saves your writing locally.
 
-Select **Rectangle** or press **V** to select handwriting. Drag the selected writing to move it. Standard copy, cut, paste, duplicate, undo, redo, and arrow-key nudging work with the mouse and keyboard.
+## Download and install
 
-The shape dropdown adds lines, arrows, rectangles, ellipses, and triangles as editable strokes. Eight quick color swatches sit in one row beside a color wheel for custom ink colors with brightness and hex controls.
+The current download requires **macOS 13 or later on Apple silicon (M1 or newer)**.
 
-Choose Pen, Pencil, Fountain, or Marker, with four widths including extra broad. Pressure has a pronounced effect on new strokes, and each stroke keeps its pen style when saved or exported.
+Download the arm64 ZIP from the [latest release](https://github.com/chere005/ScrollMind/releases/latest), unzip it, and move **ScrollMind.app** to **Applications**.
 
-An optional sidebar holds open scrolls, paper settings, navigation, and file controls. Create, name, switch, and close scrolls there; recently closed scrolls can be reopened. The trash button removes a scroll from the workspace and keeps a recoverable copy in `Documents/ScrollMind/Deleted Scrolls`. Each scroll keeps its own writing and undo history while open. Choose plain, dotted, ruled, or square-grid paper in white, ivory, parchment, or dark tones. Add named sections, page breaks, and markers to organize the continuous scroll and jump between places. The sidebar starts hidden so the page stays clear.
+The app is Developer ID signed and **not notarized**. If macOS blocks the first launch, see [Apple's instructions for opening downloaded apps](https://support.apple.com/en-us/102445).
 
-ScrollMind saves automatically in `~/Documents/ScrollMind`: the original scroll is `scroll.sm`, and additional scrolls live in `Scrolls/<id>/scroll.sm`. Each has a recovery snapshot named `scroll.backup.sm`, refreshed at startup, first writing, every five minutes, and clean close. The workspace restores your open scrolls and active place after restart. The `.sm` format is a self-contained SQLite file that preserves editable handwriting, pressure, colors, paper, sections, and markers. Writing stays on this computer. Earlier JSON saves migrate automatically, and the original files are preserved.
+## Write and arrange
 
-Use **Export Scroll** in the sidebar or File menu to save an editable `.sm` copy, a vector `.svg`, or a paginated `.pdf`. PDF exports honor page breaks. **Open Scroll** adds a working copy of a saved `.sm` to your open scrolls, preserving the chosen file and your other scrolls. **Clear Scroll** removes the current scroll's writing and navigation points in one undoable action, keeping its paper settings.
+- **Ink:** Pen, Pencil, Fountain, and Marker; four widths from Fine to Broad; eight color swatches and a color wheel with brightness and hex controls.
+- **Selection:** rectangular selection, moving, resizing, copy, cut, paste, duplicate, and undo/redo.
+- **Shapes:** lines, arrows, rectangles, ellipses, and triangles, stored as editable strokes.
+- **Scrolls:** keep several open, switch between them, and organize each with sections, markers, and page breaks.
+- **Paper:** plain, dotted, ruled, or square grid in ivory, parchment, white, or midnight blue. Dotted paper uses a clean, regular grid.
 
-Hold the lower pen button and touch or drag across strokes to delete them. Each continuous erase drag undoes in one action. Double-click that button while hovering to undo; double-click the scrolling button to redo.
+Hover over the small circle at the top to reveal the pen controls. The sidebar holds scrolls, paper settings, and file controls. Both stay out of the writing area when closed.
 
-See [controls](docs/CONTROLS.md) for keyboard and Wacom mappings. The drawing model is independent of Electron and macOS so a future Windows version can share the same ink, selection, and scroll format.
+ScrollMind opens on a connected Wacom display when available. Its screen selector can move the writing window to another display.
 
-For development, install Node.js dependencies with `npm install`, launch with `npm start`, and run `npm run preflight` before merging or pushing. UI tests use hidden windows and temporary scrolls. `node tools/make-icon.mjs` generates the application icon; `npm run build:mac` creates a Developer ID signed macOS application bundle. See [signing](docs/SIGNING.md) for verified release archives and optional notarization.
+## Save and share
+
+Scrolls save automatically in `~/Documents/ScrollMind`, with recovery snapshots. Open scrolls and the active view return after restarting. No account or cloud service is required.
+
+Export an editable **.sm** file, vector **SVG**, or paginated **PDF**. Opening an .sm file creates a working copy in a new scroll and preserves the original file.
+
+See the [controls guide](docs/CONTROLS.md) for pen buttons, keyboard shortcuts, and scroll management, or the [native format reference](docs/SCROLL-FORMAT.md) for storage and recovery details.
+
+## Development
+
+Use a Node.js version with `node:sqlite` support. Install dependencies with `npm ci`, run locally with `npm start`, and check changes with `npm run preflight`. UI tests run in hidden windows with temporary data.
+
+The drawing model is separate from the desktop shell. See [macOS distribution](docs/SIGNING.md) for signed builds and release archives.

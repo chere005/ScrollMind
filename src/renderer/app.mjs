@@ -545,7 +545,7 @@ async function initialize() {
     if (result.error && !result.document) throw new Error(result.error);
     if (result.document) { scroll = new Scroll(result.document); settings = { ...settings, ...result.document.settings }; offsetY = result.document.view.offsetY; }
     workspace = result.workspace;
-    $('#version').textContent = `ScrollMind ${info.version} · First draft`;
+    $('#version').textContent = `ScrollMind ${info.version}`;
     for (const display of displays) { const option = document.createElement('option'); option.value = display.id; option.textContent = display.label; option.selected = display.selected; $('#display-select').append(option); }
     loaded = true;
     if (info.testMode) window.scrollmindDebug = Object.freeze({ getSnapshot: snapshot, getSelection: () => [...selection], getOffsetY: () => offsetY, setOffsetY: value => setOffset(value), getWorkspace: () => workspace });
