@@ -18,7 +18,7 @@ function point(value) {
 }
 
 /** Shapes are ordinary editable strokes; add the returned array as one model command. */
-export function makeShape(kind, start, end, { color = '#243746', width = 3, constrain = false } = {}) {
+export function makeShape(kind, start, end, { color = '#243746', width = 3, penType = 'pen', constrain = false } = {}) {
   if (!SHAPES.includes(kind)) throw new TypeError(`Unknown shape: ${String(kind)}.`);
   if (typeof constrain !== 'boolean') throw new TypeError('Shape constraint must be true or false.');
   const from = point(start);
@@ -27,11 +27,11 @@ export function makeShape(kind, start, end, { color = '#243746', width = 3, cons
   const dy = to.y - from.y;
   const empty = () => {
     // Even an empty click must reject an invalid pen style consistently with normal ink.
-    makeStroke([from], color, width);
+    makeStroke([from], color, width, penType);
     return [];
   };
   if (dx === 0 && dy === 0) return empty();
-  const build = points => makeStroke(points.map(point), color, width);
+  const build = points => makeStroke(points.map(point), color, width, penType);
 
   if (kind === 'line' || kind === 'arrow') {
     const length = Math.hypot(dx, dy);

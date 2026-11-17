@@ -1,6 +1,7 @@
 import { Notebook as Scroll, boundsOf, makeStroke, strokeHitsPoint, strokeIntersectsRect, validateStrokes } from '../core/model.mjs';
 import { PenButtonShortcuts } from '../core/pen-shortcuts.mjs';
 import { makeShape } from '../core/shapes.mjs';
+import { brushWidth, brushCap } from '../core/brushes.mjs';
 import { createPenControls } from './pen-controls.mjs';
 
 const $ = selector => document.querySelector(selector);
@@ -73,6 +74,7 @@ function updateControls() {
   document.querySelectorAll('[data-width]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.width) === settings.width)));
   $('#selection-hint').textContent = selection.size ? `${selection.size} stroke${selection.size === 1 ? '' : 's'} · drag to move` : '';
   $('#paper-tone').value = settings.paperTone; $('#paper-pattern').value = settings.paper;
+  $('#pen-type').value = settings.penType || 'pen';
   $('#shape-select').value = tool === 'shape' ? shapeKind : '';
   $('#shape-select').dataset.active = String(tool === 'shape');
   penControls.refreshColor(settings.color);
@@ -145,13 +147,17 @@ function transformStroke(stroke, t) {
 function drawStroke(paint, stroke) {
   const points = stroke.points; if (!points.length) return;
   paint.save();
-  paint.strokeStyle = displayColor(stroke.color); paint.fillStyle = displayColor(stroke.color); paint.lineCap = 'round'; paint.lineJoin = 'round';
-  const size = p => Math.max(.35, stroke.width * (.3 + (p ?? .5) * 1.25));
-  if (points.length === 1) { paint.beginPath(); paint.arc(points[0].x, points[0].y, size(points[0].p) / 2, 0, Math.PI * 2); paint.fill(); }
+  paint.strokeStyle = displayColor(stroke.color); paint.fillStyle = displayColor(stroke.color); paint.lineCap = brushCap(stroke.penType); paint.lineJoin = 'round';
+  const size = (p, angle = 0) => brushWidth(stroke.width, p ?? .5, stroke.penType, angle);
+  if (points.length === 1) {
+    const point = points[0], diameter = size(point.p);
+    if (paint.lineCap === 'square') paint.fillRect(point.x - diameter / 2, point.y - diameter / 2, diameter, diameter);
+    else { paint.beginPath(); paint.arc(point.x, point.y, diameter / 2, 0, Math.PI * 2); paint.fill(); }
+  }
   else {
     for (let index = 1; index < points.length; index++) {
       const previous = points[index - 1], current = points[index];
-      paint.lineWidth = size((previous.p + current.p) / 2); paint.beginPath(); paint.moveTo(previous.x, previous.y); paint.lineTo(current.x, current.y); paint.stroke();
+      paint.lineWidth = size((previous.p + current.p) / 2, Math.atan2(current.y - previous.y, current.x - previous.x)); paint.beginPath(); paint.moveTo(previous.x, previous.y); paint.lineTo(current.x, current.y); paint.stroke();
     }
   }
   paint.restore();
@@ -170,7 +176,7 @@ function render() {
     if (preview) for (const stroke of preview) drawStroke(ctx, stroke);
   }
   ink.setTransform(1, 0, 0, 1, 0, 0); ink.clearRect(0, 0, overlay.width, overlay.height); ink.setTransform(ratio, 0, 0, ratio, 0, -offsetY * ratio);
-  if (active?.kind === 'ink') drawStroke(ink, { points: active.points, color: active.color, width: active.width });
+  if (active?.kind === 'ink') drawStroke(ink, { points: active.points, color: active.color, width: active.width, penType: active.penType });
   if (active?.kind === 'shape') for (const stroke of active.preview) drawStroke(ink, stroke);
   if (active?.kind === 'marquee') {
     const rect = rectangle(active.start, active.current); ink.fillStyle = '#427cba12'; ink.strokeStyle = '#4e83b5'; ink.lineWidth = 1; ink.setLineDash([5, 4]);
@@ -236,7 +242,7 @@ function pointerDown(event, pen = penInput(event)) {
   const point = world(event);
   if (currentTool === 'hand') active = { kind: 'pan', pointerId: event.pointerId, initialY: event.clientY, initialOffset: offsetY, temporary: tool !== 'hand' };
   else if (currentTool === 'eraser') { scroll.beginGroup(); active = { kind: barrelErase ? 'barrel-erase' : 'erase', pointerId: event.pointerId, changed: false, previous: point }; eraseAt(point); }
-  else if (currentTool === 'shape') active = { kind: 'shape', pointerId: event.pointerId, shape: shapeKind, start: point, current: point, color: settings.color, width: settings.width, constrain: event.shiftKey, preview: [] };
+  else if (currentTool === 'shape') active = { kind: 'shape', pointerId: event.pointerId, shape: shapeKind, start: point, current: point, color: settings.color, width: settings.width, penType: settings.penType || 'pen', constrain: event.shiftKey, preview: [] };
   else if (currentTool === 'select') {
     const box = boundsOf(selectedStrokes());
     const corner = box ? corners(box, 7).findIndex(p => Math.hypot(p.x - point.x, p.y - point.y) <= 9) : -1;
@@ -244,7 +250,7 @@ function pointerDown(event, pen = penInput(event)) {
       const opposite = corners(box)[(corner + 2) % 4]; active = { kind: 'resize', pointerId: event.pointerId, box, opposite, start: point, transform: { scaleX: 1, scaleY: 1, originX: opposite.x, originY: opposite.y, dx: 0, dy: 0 } };
     } else if (box && inside(point, box, 7) && !event.shiftKey) active = { kind: 'move', pointerId: event.pointerId, start: point, dx: 0, dy: 0 };
     else { active = { kind: 'marquee', pointerId: event.pointerId, start: point, current: point, previousSelection: event.shiftKey ? new Set(selection) : new Set() }; if (!event.shiftKey) selection.clear(); }
-  } else { selection.clear(); active = { kind: 'ink', pointerId: event.pointerId, points: [], color: settings.color, width: settings.width }; appendPoint(event); }
+  } else { selection.clear(); active = { kind: 'ink', pointerId: event.pointerId, points: [], color: settings.color, width: settings.width, penType: settings.penType || 'pen' }; appendPoint(event); }
   updateCursor(); requestRender();
 }
 function pointerMove(event) {
@@ -271,7 +277,7 @@ function pointerMove(event) {
     active.previous = point;
   } else if (active.kind === 'shape') {
     active.current = world(event); active.constrain = event.shiftKey;
-    active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, constrain: active.constrain });
+    active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: active.constrain });
   } else if (active.kind === 'pan') setOffset(active.initialOffset + active.initialY - event.clientY, false);
   else if (active.kind === 'move') { const point = world(event); active.dx = point.x - active.start.x; active.dy = point.y - active.start.y; }
   else if (active.kind === 'resize') {
@@ -285,7 +291,7 @@ function pointerMove(event) {
 function finishGesture(cancel = false) {
   if (!active) return;
   const gesture = active; active = null; let modified = false;
-  if (gesture.kind === 'ink' && gesture.points.length) modified = scroll.add([makeStroke(gesture.points, gesture.color, gesture.width)]);
+  if (gesture.kind === 'ink' && gesture.points.length) modified = scroll.add([makeStroke(gesture.points, gesture.color, gesture.width, gesture.penType)]);
   else if (!cancel && gesture.kind === 'shape' && gesture.preview.length) modified = scroll.add(gesture.preview);
   else if (gesture.kind === 'erase' || gesture.kind === 'barrel-erase') { scroll.endGroup(); modified = gesture.changed; }
   else if (!cancel && gesture.kind === 'move' && (Math.abs(gesture.dx) > .1 || Math.abs(gesture.dy) > .1)) modified = scroll.move([...selection], gesture.dx, gesture.dy);
@@ -299,7 +305,7 @@ function finishGesture(cancel = false) {
   if (modified) changed(); updateControls(); requestRender();
 }
 overlay.addEventListener('pointerdown', pointerDown); overlay.addEventListener('pointermove', pointerMove);
-overlay.addEventListener('pointerup', event => { penInput(event); if (loaded && !loadError && !fileOperation && penShortcut(event)) return; if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); else if (active.kind === 'shape') { active.current = world(event); active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, constrain: event.shiftKey }); } finishGesture(); } });
+overlay.addEventListener('pointerup', event => { penInput(event); if (loaded && !loadError && !fileOperation && penShortcut(event)) return; if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); else if (active.kind === 'shape') { active.current = world(event); active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: event.shiftKey }); } finishGesture(); } });
 overlay.addEventListener('pointercancel', event => { penButtons.delete(event.pointerId); penShortcuts.reset(); finishGesture(true); });
 overlay.addEventListener('lostpointercapture', () => finishGesture(true));
 overlay.addEventListener('pointerleave', event => { if (!active && event.buttons === 0) penButtons.delete(event.pointerId); });
@@ -426,6 +432,7 @@ document.querySelectorAll('[data-color]').forEach(button => button.addEventListe
 document.querySelectorAll('[data-width]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.width = Number(button.dataset.width); changed(); }));
 for (const name of ['undo', 'redo', 'home', 'fullscreen']) $(`#${name}`).addEventListener('click', () => safely(name));
 for (const name of ['open-sm', 'new-scroll', 'clear-scroll', 'export-sm', 'export-svg', 'export-pdf']) $(`#${name}`).addEventListener('click', () => safely(name));
+$('#pen-type').addEventListener('change', event => { finishGesture(); settings.penType = event.target.value; if (tool !== 'shape') setTool('pen'); changed(); event.target.blur(); overlay.focus({ preventScroll: true }); });
 $('#shape-select').addEventListener('change', event => { if (!event.target.value) return; shapeKind = event.target.value; setTool('shape'); event.target.blur(); overlay.focus({ preventScroll: true }); });
 $('#controls-link').addEventListener('click', () => safely('help')); $('#help-close').addEventListener('click', () => $('#help').close());
 $('#context-menu').addEventListener('click', event => { const button = event.target.closest('[data-command]'); if (button) { safely(button.dataset.command); $('#context-menu').hidden = true; } });

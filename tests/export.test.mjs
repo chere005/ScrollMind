@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { exportSVG, exportPDFHTML } from '../src/core/export.mjs';
+import { brushWidth } from '../src/core/brushes.mjs';
 
 const stroke = (id, points, width = 3, color = '#243746') => ({ id, color, width, points: points.map(([x, y, p = 0.5]) => ({ x, y, p })) });
 const snapshot = (strokes = [], markers = [], settings = {}) => ({ version: 1, strokes, markers, settings: { paperTone: 'ivory', paper: 'plain', ...settings }, view: { offsetY: 999999 } });
@@ -22,6 +23,28 @@ test('SVG uses vector pressure widths, rounded segments, and circles for pen tap
   assert.match(svg, /M0 0L30 20" stroke-width="3\.7"/);
   assert.match(svg, /M30 20L60 20" stroke-width="5\.7"/);
   assert.match(svg, /<circle cx="100" cy="100" r="3\.1" fill="#243746" stroke="none"/);
+});
+
+test('SVG and PDF preserve the new pressure curves and distinct pen nibs without changing legacy ink', () => {
+  const old = stroke('old', [[0, 0, .1], [30, 0, .1]], 12);
+  const pen = { ...stroke('pen', [[0, 30, .1], [30, 30, .1], [60, 30, .9], [90, 30, .9]], 12), penType: 'pen' };
+  const pencil = { ...stroke('pencil', [[0, 60, .5], [30, 60, .5]], 12), penType: 'pencil' };
+  const fountain = { ...stroke('fountain', [[0, 90, .9], [30, 90, .9], [30, 120, .9]], 12), penType: 'fountain' };
+  const marker = { ...stroke('marker', [[0, 150, .5], [30, 150, .5]], 12), penType: 'marker' };
+  const tap = { ...stroke('marker-tap', [[60, 150, .5]], 12), penType: 'marker' };
+  const document = snapshot([old, pen, pencil, fountain, marker, tap]);
+  const svg = exportSVG(document);
+  const expected = pressure => String(Number(brushWidth(12, pressure, 'pen').toFixed(4)));
+  assert.match(svg, /M0 0L30 0" stroke-width="5\.1"/);
+  assert.ok(svg.includes(`M0 30L30 30" stroke-width="${expected(.1)}"`));
+  assert.ok(svg.includes(`M60 30L90 30" stroke-width="${expected(.9)}"`));
+  assert.match(svg, /data-pen-type="pencil"/);
+  assert.match(svg, /data-pen-type="fountain"/);
+  assert.match(svg, /data-stroke-id="marker"[^>]*stroke-linecap="square"/);
+  assert.match(svg, /data-stroke-id="marker-tap"[^]*?<rect[^>]*fill="#243746" stroke="none"/);
+  const { html } = exportPDFHTML(document);
+  for (const penType of ['pen', 'pencil', 'fountain', 'marker']) assert.ok(html.includes(`data-pen-type="${penType}"`));
+  assert.ok(html.includes(`M60 30L90 30" stroke-width="${expected(.9)}"`));
 });
 
 test('paper colors, continuous world-space ruling, and safe marker text are preserved', () => {

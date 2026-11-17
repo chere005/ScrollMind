@@ -24,7 +24,7 @@ export function createPenControls({ onColor, focusCanvas }) {
   const wheel = document.querySelector('#color-wheel');
   const valueInput = document.querySelector('#color-value');
   const hexInput = document.querySelector('#color-hex');
-  let hoverTimer, closeTimer, pointerInside = false, interacting = false;
+  let hoverTimer, closeTimer, pointerPosition = null, interacting = false;
   let hsv = rgbToHSV('#243746'), selectedColor = '#243746', wheelPointer = null;
   const size = Math.round(220 * Math.min(3, devicePixelRatio || 1));
   wheel.width = wheel.height = size;
@@ -41,42 +41,67 @@ export function createPenControls({ onColor, focusCanvas }) {
   basePaint.putImageData(pixels, 0, 0);
 
   function formFocused() {
-    return root.contains(document.activeElement) && document.activeElement.matches('input, select, #color-wheel');
+    return root.contains(document.activeElement) && document.activeElement.matches('input, select, #color-wheel, :focus-visible');
   }
   function cancelHover() { clearTimeout(hoverTimer); hoverTimer = null; }
+  function cancelClose() { clearTimeout(closeTimer); closeTimer = null; }
+  function rememberPointer(event) {
+    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) pointerPosition = { x: event.clientX, y: event.clientY };
+  }
+  function withinGrace() {
+    if (root.hidden || !pointerPosition) return false;
+    return [toggle, toolbar, picker].some(element => {
+      if (element.hidden || !element.getClientRects().length) return false;
+      const box = element.getBoundingClientRect();
+      return pointerPosition.x >= box.left - 28 && pointerPosition.x <= box.right + 28
+        && pointerPosition.y >= box.top - 28 && pointerPosition.y <= box.bottom + 28;
+    });
+  }
   function open() {
     if (root.hidden) return;
-    cancelHover(); clearTimeout(closeTimer);
+    cancelHover(); cancelClose();
     toolbar.hidden = false; toggle.setAttribute('aria-expanded', 'true');
+    root.dataset.expanded = 'true';
   }
   function close(focus = false) {
-    cancelHover(); clearTimeout(closeTimer);
+    cancelHover(); cancelClose();
+    interacting = false;
     endWheelDrag();
     picker.hidden = true; pickerToggle.setAttribute('aria-expanded', 'false');
     toolbar.hidden = true; toggle.setAttribute('aria-expanded', 'false');
+    root.dataset.expanded = 'false';
     if (root.contains(document.activeElement)) document.activeElement.blur();
     if (focus) focusCanvas();
   }
   function scheduleClose() {
-    clearTimeout(closeTimer);
-    if (pointerInside || interacting || formFocused()) return;
-    closeTimer = setTimeout(() => { if (!pointerInside && !interacting && !formFocused()) close(); }, 250);
+    if (toolbar.hidden || withinGrace() || interacting || formFocused()) { cancelClose(); return; }
+    // Start once on leaving the margin, so continued movement cannot postpone closing.
+    if (closeTimer !== null && closeTimer !== undefined) return;
+    closeTimer = setTimeout(() => {
+      closeTimer = null;
+      if (!withinGrace() && !interacting && !formFocused()) close();
+    }, 500);
   }
-  root.addEventListener('pointerenter', () => {
-    pointerInside = true; clearTimeout(closeTimer);
+  root.addEventListener('pointerenter', event => {
+    rememberPointer(event); cancelClose();
     if (toolbar.hidden && !hoverTimer) hoverTimer = setTimeout(open, 200);
   });
-  root.addEventListener('pointerleave', () => { pointerInside = false; cancelHover(); scheduleClose(); });
+  root.addEventListener('pointerleave', event => { rememberPointer(event); cancelHover(); scheduleClose(); });
+  document.addEventListener('pointermove', event => { rememberPointer(event); scheduleClose(); }, { capture: true, passive: true });
+  document.addEventListener('pointerout', event => {
+    if (event.relatedTarget !== null) return;
+    pointerPosition = null; cancelHover(); scheduleClose();
+  }, { passive: true });
   root.addEventListener('focusin', () => { if (!interacting) open(); });
   root.addEventListener('focusout', () => { setTimeout(scheduleClose, 0); });
-  root.addEventListener('pointerdown', () => { interacting = true; clearTimeout(closeTimer); }, true);
-  document.addEventListener('pointerup', () => { interacting = false; scheduleClose(); }, true);
-  document.addEventListener('pointercancel', () => { interacting = false; scheduleClose(); }, true);
+  root.addEventListener('pointerdown', event => { rememberPointer(event); interacting = true; cancelClose(); }, true);
+  document.addEventListener('pointerup', event => { rememberPointer(event); interacting = false; scheduleClose(); }, true);
+  document.addEventListener('pointercancel', () => { interacting = false; pointerPosition = null; scheduleClose(); }, true);
   toggle.addEventListener('click', () => { if (toolbar.hidden) open(); else close(true); });
   root.addEventListener('keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); }
   });
-  window.addEventListener('blur', () => { interacting = false; pointerInside = false; close(); });
+  window.addEventListener('blur', () => { interacting = false; pointerPosition = null; close(); });
   pickerToggle.addEventListener('click', () => {
     picker.hidden = !picker.hidden;
     pickerToggle.setAttribute('aria-expanded', String(!picker.hidden));
@@ -127,7 +152,10 @@ export function createPenControls({ onColor, focusCanvas }) {
     const pointer = wheelPointer; wheelPointer = null;
     if (pointer !== null) try { wheel.releasePointerCapture(pointer); } catch {}
   }
-  const finishWheel = event => { if (wheelPointer === event.pointerId) endWheelDrag(); };
+  const finishWheel = event => {
+    if (wheelPointer !== event.pointerId) return;
+    endWheelDrag(); interacting = false; scheduleClose();
+  };
   wheel.addEventListener('pointerup', finishWheel); wheel.addEventListener('pointercancel', finishWheel);
   wheel.addEventListener('lostpointercapture', finishWheel);
   wheel.addEventListener('keydown', event => {

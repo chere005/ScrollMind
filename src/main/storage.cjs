@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const { DatabaseSync, backup: sqliteBackup } = require('node:sqlite');
 
 const APPLICATION_ID = 0x534d4e44; // SMND
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_FILE_BYTES = 1024 * 1024 * 1024;
 const BACKUP_INTERVAL = 5 * 60 * 1000;
 const MAX_STROKES = 100_000;
@@ -45,10 +45,12 @@ function verifySchema(db) {
   if (db.prepare('PRAGMA application_id').get().application_id !== APPLICATION_ID) {
     throw new UnsupportedScrollError('This file is not a ScrollMind scroll.');
   }
-  if (db.prepare('PRAGMA user_version').get().user_version !== SCHEMA_VERSION) {
+  const version = db.prepare('PRAGMA user_version').get().user_version;
+  if (version !== 1 && version !== SCHEMA_VERSION) {
     throw new UnsupportedScrollError('This scroll uses an unsupported format version. Update ScrollMind before opening it.');
   }
-  for (const [table, columns] of Object.entries(COLUMNS)) {
+  for (const [table, originalColumns] of Object.entries(COLUMNS)) {
+    const columns = table === 'strokes' && version >= 2 ? [...originalColumns, 'pen_type'] : originalColumns;
     const actual = db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
     if (actual.length !== columns.length || columns.some((column, index) => column !== actual[index])) {
       throw new Error('The scroll database has a damaged table layout.');
@@ -58,17 +60,18 @@ function verifySchema(db) {
     }
   }
   if (db.prepare('PRAGMA quick_check(1)').get().quick_check !== 'ok') throw new Error('The scroll database is damaged.');
+  return version;
 }
 
 function snapshotFromDatabase(db, validate) {
-  verifySchema(db);
+  const version = verifySchema(db);
   const metadata = new Map(db.prepare('SELECT key, value FROM metadata').all().map((row) => [row.key, JSON.parse(row.value)]));
   if (!metadata.has('view') || !metadata.has('settings')) throw new Error('The scroll is missing its settings.');
-  const rows = db.prepare('SELECT id, color, width, points FROM strokes ORDER BY order_index, rowid LIMIT 100001').all();
+  const rows = db.prepare(`SELECT id, color, width, points, ${version >= 2 ? 'pen_type' : 'NULL AS pen_type'} FROM strokes ORDER BY order_index, rowid LIMIT 100001`).all();
   const markers = db.prepare('SELECT id, y, label, kind FROM markers ORDER BY y, rowid LIMIT 10001').all().map((row) => ({ ...row }));
   return validate({
     version: 1,
-    strokes: rows.map((row) => ({ id: row.id, color: row.color, width: row.width, points: JSON.parse(row.points) })),
+    strokes: rows.map((row) => ({ id: row.id, color: row.color, width: row.width, points: JSON.parse(row.points), ...(row.pen_type === null ? {} : { penType: row.pen_type }) })),
     markers, view: metadata.get('view'), settings: metadata.get('settings'),
   });
 }
@@ -142,17 +145,23 @@ function createStore(directory, { validate } = {}) {
     if (create) {
       db.exec(`BEGIN IMMEDIATE;
         PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${SCHEMA_VERSION};
-        CREATE TABLE strokes (id TEXT PRIMARY KEY, order_index INTEGER NOT NULL, color TEXT NOT NULL, width REAL NOT NULL, points TEXT NOT NULL, bounds TEXT NOT NULL);
+        CREATE TABLE strokes (id TEXT PRIMARY KEY, order_index INTEGER NOT NULL, color TEXT NOT NULL, width REAL NOT NULL, points TEXT NOT NULL, bounds TEXT NOT NULL, pen_type TEXT DEFAULT NULL);
         CREATE INDEX strokes_order ON strokes(order_index);
         CREATE TABLE markers (id TEXT PRIMARY KEY, y REAL NOT NULL, label TEXT NOT NULL, kind TEXT NOT NULL);
         CREATE INDEX markers_position ON markers(y);
         CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         COMMIT;`);
+    } else if (db.prepare('PRAGMA user_version').get().user_version === 1) {
+      // Native v1 styles remain NULL, preserving legacy pressure appearance.
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.exec(`ALTER TABLE strokes ADD COLUMN pen_type TEXT DEFAULT NULL; PRAGMA user_version=${SCHEMA_VERSION}; COMMIT;`);
+      } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
     }
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=1000;');
     statements = {
       remove: db.prepare('DELETE FROM strokes WHERE id = ?'),
-      upsert: db.prepare('INSERT INTO strokes (id,order_index,color,width,points,bounds) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET order_index=excluded.order_index,color=excluded.color,width=excluded.width,points=excluded.points,bounds=excluded.bounds'),
+      upsert: db.prepare('INSERT INTO strokes (id,order_index,color,width,points,bounds,pen_type) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET order_index=excluded.order_index,color=excluded.color,width=excluded.width,points=excluded.points,bounds=excluded.bounds,pen_type=excluded.pen_type'),
       reorder: db.prepare('UPDATE strokes SET order_index = ? WHERE id = ? AND order_index <> ?'),
       markerRemove: db.prepare('DELETE FROM markers WHERE id = ?'),
       markerUpsert: db.prepare('INSERT INTO markers (id,y,label,kind) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET y=excluded.y,label=excluded.label,kind=excluded.kind'),
@@ -227,7 +236,7 @@ function createStore(directory, { validate } = {}) {
       else { count++; newIds.push(stroke.id); }
       pointCount += stroke.points.length;
       const points = JSON.stringify(stroke.points);
-      if (!old || old.points !== points || old.stroke.color !== stroke.color || old.stroke.width !== stroke.width) {
+      if (!old || old.points !== points || old.stroke.color !== stroke.color || old.stroke.width !== stroke.width || old.stroke.penType !== stroke.penType) {
         prepared.push({ stroke, points, bounds: JSON.stringify(boundsOf([stroke])) });
       }
     }
@@ -244,7 +253,7 @@ function createStore(directory, { validate } = {}) {
     db.exec('BEGIN IMMEDIATE');
     try {
       for (const id of removed) statements.remove.run(id);
-      for (const { stroke, points, bounds } of prepared) statements.upsert.run(stroke.id, indices.get(stroke.id), stroke.color, stroke.width, points, bounds);
+      for (const { stroke, points, bounds } of prepared) statements.upsert.run(stroke.id, indices.get(stroke.id), stroke.color, stroke.width, points, bounds, stroke.penType ?? null);
       if (order !== model.order) for (const [id, index] of indices) if (model.indices.get(id) !== index) statements.reorder.run(index, id, index);
       if (changes.markers !== undefined) {
         const oldMarkers = new Map(model.markers.map((marker) => [marker.id, marker]));

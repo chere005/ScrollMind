@@ -1,4 +1,6 @@
 // The scroll contains only portable data. Drawing and filesystem APIs live elsewhere.
+import { brushWidth, maxBrushWidth, brushCap } from './brushes.mjs';
+
 const VERSION = 1;
 const BUCKET_HEIGHT = 1024;
 const MAX_BUCKETS_PER_STROKE = 256;
@@ -40,11 +42,13 @@ function normalizeSettings(value = {}) {
   if (!PAPERS.has(paper)) throw new TypeError('Unknown paper style.');
   const paperTone = value.paperTone ?? DEFAULT_SETTINGS.paperTone;
   if (!PAPER_TONES.has(paperTone)) throw new TypeError('Unknown paper tone.');
+  if (value.penType !== undefined) brushCap(value.penType);
   return {
     color: color(value.color ?? DEFAULT_SETTINGS.color),
     width: finite(value.width ?? DEFAULT_SETTINGS.width, 'Pen width', 0.01, 1000),
     paper,
     paperTone,
+    ...(value.penType !== undefined ? { penType: value.penType } : {}),
   };
 }
 
@@ -69,7 +73,9 @@ function validateStroke(value) {
       p: finite(point.p, 'Point pressure', 0, 1),
     };
   });
-  return { id: value.id, color: color(value.color), width: finite(value.width, 'Stroke width', 0.01, 1000), points };
+  if (value.penType !== undefined) brushCap(value.penType);
+  return { id: value.id, color: color(value.color), width: finite(value.width, 'Stroke width', 0.01, 1000), points,
+    ...(value.penType !== undefined ? { penType: value.penType } : {}) };
 }
 
 /** Validate imported/clipboard strokes without retaining references to caller data. */
@@ -124,8 +130,8 @@ export function validateSnapshot(value) {
 }
 
 /** Clipboard copies should call this to obtain a new stroke identity. */
-export function makeStroke(points, inkColor, width) {
-  return validateStroke({ id: globalThis.crypto.randomUUID(), points, color: inkColor, width });
+export function makeStroke(points, inkColor, width, penType = 'pen') {
+  return validateStroke({ id: globalThis.crypto.randomUUID(), points, color: inkColor, width, penType });
 }
 
 function immutable(stroke) {
@@ -134,12 +140,8 @@ function immutable(stroke) {
   return Object.freeze(stroke);
 }
 
-function inkDiameter(width, pressure) {
-  return Math.max(0.35, width * (0.3 + pressure * 1.25));
-}
-
 function segmentRadius(stroke, a, b = a) {
-  return inkDiameter(stroke.width, Math.max(a.p, b.p)) / 2;
+  return brushWidth(stroke.width, Math.max(a.p, b.p), stroke.penType, Math.atan2(b.y - a.y, b.x - a.x)) / 2;
 }
 
 function strokeBounds(stroke) {
@@ -150,15 +152,20 @@ function strokeBounds(stroke) {
   let right = -Infinity;
   let bottom = -Infinity;
   let maxDiameter = 0;
-  for (const point of stroke.points) {
+  for (let index = 0; index < stroke.points.length; index++) {
+    const point = stroke.points[index];
     left = Math.min(left, point.x);
     right = Math.max(right, point.x);
     top = Math.min(top, point.y);
     bottom = Math.max(bottom, point.y);
-    maxDiameter = Math.max(maxDiameter, inkDiameter(stroke.width, point.p));
+    if (index > 0) maxDiameter = Math.max(maxDiameter, segmentRadius(stroke, stroke.points[index - 1], point) * 2);
+    else if (stroke.points.length === 1) maxDiameter = segmentRadius(stroke, point) * 2;
   }
-  const radius = maxDiameter / 2;
-  const result = { x: left - radius, y: top - radius, width: right - left + maxDiameter, height: bottom - top + maxDiameter };
+  maxDiameter = Math.min(maxBrushWidth(stroke.width, stroke.penType), maxDiameter);
+  // Square segment caps can project farther along an axis when the line is diagonal.
+  const capReach = brushCap(stroke.penType) === 'square' && stroke.points.length > 1 ? Math.SQRT2 : 1;
+  const radius = maxDiameter * capReach / 2;
+  const result = { x: left - radius, y: top - radius, width: right - left + radius * 2, height: bottom - top + radius * 2 };
   if (Object.isFrozen(stroke)) cachedBounds.set(stroke, result);
   return result;
 }
@@ -216,9 +223,56 @@ function segmentIntersectsRect(a, b, rect) {
   return true;
 }
 
+function squareSegment(stroke, a, b = a) {
+  const radius = segmentRadius(stroke, a, b);
+  const length = Math.hypot(b.x - a.x, b.y - a.y);
+  const ux = length ? (b.x - a.x) / length : 1;
+  const uy = length ? (b.y - a.y) / length : 0;
+  const start = { x: a.x - ux * radius, y: a.y - uy * radius };
+  const end = { x: b.x + ux * radius, y: b.y + uy * radius };
+  return [
+    { x: start.x - uy * radius, y: start.y + ux * radius },
+    { x: end.x - uy * radius, y: end.y + ux * radius },
+    { x: end.x + uy * radius, y: end.y - ux * radius },
+    { x: start.x + uy * radius, y: start.y - ux * radius },
+  ];
+}
+
+function insideSquare(point, corners) {
+  let positive = false;
+  let negative = false;
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i], b = corners[(i + 1) % 4];
+    const cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+    if (cross > 0) positive = true;
+    if (cross < 0) negative = true;
+    if (positive && negative) return false;
+  }
+  return true;
+}
+
+function squareIntersectsRect(corners, rect) {
+  if (corners.some((a, index) => segmentIntersectsRect(a, corners[(index + 1) % 4], rect))) return true;
+  return [
+    { x: rect.x, y: rect.y }, { x: rect.x + rect.width, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y + rect.height }, { x: rect.x, y: rect.y + rect.height },
+  ].some(point => insideSquare(point, corners));
+}
+
+function squareHitsPoint(corners, point, radius) {
+  return insideSquare(point, corners) || corners.some((a, index) => distanceSquaredToSegment(point, a, corners[(index + 1) % 4]) <= radius * radius);
+}
+
 export function strokeIntersectsRect(stroke, value) {
   const rect = normalizedRect(value);
   if (!overlaps(strokeBounds(stroke), rect)) return false;
+  if (brushCap(stroke.penType) === 'square') {
+    if (stroke.points.length === 1) return squareIntersectsRect(squareSegment(stroke, stroke.points[0]), rect);
+    for (let i = 1; i < stroke.points.length; i++) {
+      if (squareIntersectsRect(squareSegment(stroke, stroke.points[i - 1], stroke.points[i]), rect)) return true;
+    }
+    return false;
+  }
   const pointDistance = (point) => (Math.max(rect.x - point.x, 0, point.x - rect.x - rect.width)) ** 2
     + (Math.max(rect.y - point.y, 0, point.y - rect.y - rect.height)) ** 2;
   if (stroke.points.length === 1) return pointDistance(stroke.points[0]) <= segmentRadius(stroke, stroke.points[0]) ** 2;
@@ -251,6 +305,13 @@ export function strokeHitsPoint(stroke, point, radius = 0) {
   finite(point?.y, 'Hit point y');
   finite(radius, 'Hit radius', 0, MAX_COORDINATE);
   if (!overlaps(strokeBounds(stroke), { x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 })) return false;
+  if (brushCap(stroke.penType) === 'square') {
+    if (stroke.points.length === 1) return squareHitsPoint(squareSegment(stroke, stroke.points[0]), point, radius);
+    for (let i = 1; i < stroke.points.length; i++) {
+      if (squareHitsPoint(squareSegment(stroke, stroke.points[i - 1], stroke.points[i]), point, radius)) return true;
+    }
+    return false;
+  }
   if (stroke.points.length === 1) return distanceSquaredToSegment(point, stroke.points[0], stroke.points[0]) <= (radius + segmentRadius(stroke, stroke.points[0])) ** 2;
   for (let i = 1; i < stroke.points.length; i++) {
     const reach = radius + segmentRadius(stroke, stroke.points[i - 1], stroke.points[i]);

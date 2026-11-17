@@ -75,11 +75,15 @@ function readNativeScroll(file) {
   try {
     expect(database.prepare('PRAGMA quick_check').get().quick_check).toBe('ok');
     expect(database.prepare('PRAGMA application_id').get().application_id).toBe(0x534d4e44);
-    expect(database.prepare('PRAGMA user_version').get().user_version).toBe(1);
+    const schema = database.prepare('PRAGMA user_version').get().user_version;
+    expect([1, 2]).toContain(schema);
     const metadata = Object.fromEntries(database.prepare('SELECT key, value FROM metadata').all().map(row => [row.key, JSON.parse(row.value)]));
     return {
       version: 1,
-      strokes: database.prepare('SELECT id, color, width, points FROM strokes ORDER BY order_index').all().map(row => ({ ...row, points: JSON.parse(row.points) })),
+      strokes: database.prepare(`SELECT id, color, width, points, ${schema >= 2 ? 'pen_type' : 'NULL AS pen_type'} FROM strokes ORDER BY order_index`).all().map(row => {
+        const { pen_type, ...stroke } = row;
+        return { ...stroke, points: JSON.parse(stroke.points), ...(pen_type == null ? {} : { penType: pen_type }) };
+      }),
       markers: database.prepare('SELECT id, y, label, kind FROM markers ORDER BY y, rowid').all().map(row => ({ ...row })),
       view: metadata.view,
       settings: metadata.settings,
@@ -324,6 +328,11 @@ test('optional sidebar styles paper and saves sections, page breaks and writing 
   await clickPenControl('#undo');
   await expect.poll(async () => (await snapshot()).markers.length).toBe(3);
   expect((await snapshot()).markers.find(marker => marker.kind === 'section').label).toBe('Meeting notes');
+  const sidebarButton = await page.locator('#sidebar-toggle').boundingBox();
+  const penToolbar = await page.locator('#toolbar').boundingBox();
+  const center = { x: sidebarButton.x + sidebarButton.width / 2, y: sidebarButton.y + sidebarButton.height / 2 };
+  expect(center.x >= penToolbar.x && center.x <= penToolbar.x + penToolbar.width
+    && center.y >= penToolbar.y && center.y <= penToolbar.y + penToolbar.height).toBe(false);
   await page.locator('#sidebar-toggle').click();
   await page.keyboard.press(`${modifier}+0`);
   await draw();
@@ -365,6 +374,8 @@ test('opening a damaged primary recovers visible writing and preserves the damag
 
 test('exports independent editable SM, vector SVG and paginated PDF, then reopens the SM for editing', async () => {
   await clickPenControl('[data-tool="pen"]');
+  await page.locator('#pen-type').selectOption('marker');
+  await clickPenControl('[data-width="12"]');
   await pointer('pointerdown', 380, 250, { pressure: 0.2 });
   await pointer('pointermove', 430, 270, { pressure: 0.8 });
   await pointer('pointerup', 430, 270, { pressure: 0, buttons: 0 });
@@ -375,6 +386,7 @@ test('exports independent editable SM, vector SVG and paginated PDF, then reopen
   await page.locator('#sidebar-toggle').click();
   await draw({ x: 520, y: 620 }, { x: 700, y: 650 });
   const expected = await snapshot();
+  expect(expected.strokes.every(stroke => stroke.penType === 'marker' && stroke.width === 12)).toBe(true);
   await page.locator('#sidebar-toggle').click();
 
   await page.locator('#export-sm').click();
@@ -391,6 +403,7 @@ test('exports independent editable SM, vector SVG and paginated PDF, then reopen
   const svg = await readFile(await exportedPath('svg'), 'utf8');
   expect(svg).toMatch(/<svg\b/);
   expect(svg).toMatch(/<path\b/);
+  expect(svg).toContain('data-pen-type="marker"');
   expect(svg).not.toMatch(/<image\b|<foreignObject\b|<script\b|id=["']toolbar["']/i);
   const vectorContent = await page.evaluate(source => {
     const document = new DOMParser().parseFromString(source, 'image/svg+xml');
@@ -683,12 +696,13 @@ test('delete removes inactive and last scrolls without losing other history or t
   await expect(page.locator(`.scroll-reopen[data-scroll-id="${secondId}"]`)).toHaveCount(0);
 });
 
-test('pen controls open after deliberate hover, stay usable inside, and collapse after leaving', async () => {
+test('pen controls open after deliberate hover, stay usable inside, and collapse after leaving', async ({}, testInfo) => {
   const toolbar = page.locator('#toolbar');
   const toggle = page.locator('#pen-controls-toggle');
   await page.mouse.move(1000, 650);
   await expect(toolbar).toBeHidden();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  const circle = await toggle.boundingBox();
   await toggle.hover();
   await page.waitForTimeout(80);
   await expect(toolbar).toBeHidden();
@@ -699,17 +713,40 @@ test('pen controls open after deliberate hover, stay usable inside, and collapse
   await toggle.hover();
   await expect(toolbar).toBeVisible();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const expanded = await toolbar.boundingBox();
+  expect(expanded.x).toBeLessThan(circle.x + circle.width / 2);
+  expect(expanded.x + expanded.width).toBeGreaterThan(circle.x + circle.width / 2);
+  expect(expanded.y).toBeLessThan(circle.y + circle.height / 2);
+  expect(expanded.y + expanded.height).toBeGreaterThan(circle.y + circle.height / 2);
   await page.locator('[data-tool="select"]').hover();
   await page.waitForTimeout(300);
   await expect(toolbar).toBeVisible();
+  await page.mouse.move(expanded.x + expanded.width / 2, expanded.y + expanded.height + 15);
+  await page.waitForTimeout(650);
+  await expect(toolbar).toBeVisible();
+  await page.mouse.move(1000, 650);
+  await page.waitForTimeout(250);
+  await expect(toolbar).toBeVisible();
+  await page.locator('[data-tool="select"]').hover();
+  await page.waitForTimeout(650);
+  await expect(toolbar).toBeVisible();
+  await page.mouse.move(1000, 650);
+  await expect(toolbar).toBeHidden();
+  await openPenControls();
   await page.locator('[data-tool="select"]').click();
   await expect(page.locator('[data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
 
   await page.locator('#color-wheel-toggle').click();
   await expect(page.locator('#color-picker')).toBeVisible();
+  const picker = await page.locator('#color-picker').boundingBox();
+  await page.mouse.move(picker.x + picker.width + 15, picker.y + picker.height / 2);
+  await page.waitForTimeout(650);
+  await expect(page.locator('#color-picker')).toBeVisible();
+  await expect(toolbar).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('expanded-palette.png') });
   await page.locator('#color-value').focus();
   await page.mouse.move(1000, 650);
-  await page.waitForTimeout(350);
+  await page.waitForTimeout(650);
   await expect(toolbar).toBeVisible();
   await page.locator('#overlay').focus();
   await expect(toolbar).toBeHidden();
@@ -718,17 +755,21 @@ test('pen controls open after deliberate hover, stay usable inside, and collapse
 });
 
 test('basic shapes support negative drags, ordinary selection and undo, and editable SQLite persistence', async () => {
-  let previousCount = 0, beforeLastShape;
+  let previousCount = 0, beforeLastShape, presetColor;
   for (const [index, shape] of ['line', 'arrow', 'rectangle', 'ellipse', 'triangle'].entries()) {
     await openPenControls();
     await page.locator('#shape-select').selectOption(shape);
-    if (shape === 'rectangle') await clickPenControl('[data-color="#b94d49"]');
+    if (shape === 'rectangle') {
+      const addedSwatch = page.getByRole('button', { name: 'Purple ink', exact: true });
+      presetColor = await addedSwatch.getAttribute('data-color');
+      await addedSwatch.click();
+    }
     beforeLastShape = (await snapshot()).strokes;
     await drag({ x: 520, y: 250 + index * 65 }, { x: 350, y: 200 + index * 65 });
     await expect.poll(async () => (await snapshot()).strokes.length).toBeGreaterThan(previousCount);
     if (shape === 'rectangle') {
       const rectangle = (await snapshot()).strokes.at(-1);
-      expect(rectangle.color).toBe('#b94d49');
+      expect(rectangle.color).toBe(presetColor);
       expect(rectangle.points.map(({ x, y }) => [x, y])).toEqual([[350, 330], [520, 330], [520, 380], [350, 380], [350, 330]]);
     }
     previousCount = (await snapshot()).strokes.length;
@@ -758,6 +799,20 @@ test('basic shapes support negative drags, ordinary selection and undo, and edit
 
 test('the color wheel, brightness and custom hex affect actual ink and persist on restart', async () => {
   await openPenControls();
+  await expect(page.locator('[data-color]')).toHaveCount(8);
+  const swatches = await page.locator('[data-color]').evaluateAll(buttons => buttons.map(button => ({
+    color: button.dataset.color, preview: getComputedStyle(button, '::after').backgroundColor,
+  })));
+  for (const swatch of swatches) {
+    const channels = swatch.color.slice(1).match(/../g).map(channel => parseInt(channel, 16));
+    expect(swatch.preview).toBe(`rgb(${channels.join(', ')})`);
+  }
+  const addedSwatch = page.getByRole('button', { name: 'Orange ink', exact: true });
+  const presetColor = await addedSwatch.getAttribute('data-color');
+  await addedSwatch.click();
+  await draw({ x: 850, y: 240 }, { x: 960, y: 280 });
+  expect((await snapshot()).strokes.at(-1).color).toBe(presetColor);
+  await openPenControls();
   await page.locator('#color-wheel-toggle').click();
   await expect(page.locator('#color-picker')).toBeVisible();
   const wheel = await page.locator('#color-wheel').boundingBox();
@@ -773,7 +828,7 @@ test('the color wheel, brightness and custom hex affect actual ink and persist o
   expect(shadedColor).not.toBe(wheelColor);
   await page.locator('#overlay').focus();
   await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
-  expect((await snapshot()).strokes[0].color).toBe(shadedColor);
+  expect((await snapshot()).strokes.at(-1).color).toBe(shadedColor);
 
   await openPenControls();
   if (await page.locator('#color-picker').isHidden()) await page.locator('#color-wheel-toggle').click();
@@ -809,10 +864,56 @@ test('the color wheel, brightness and custom hex affect actual ink and persist o
   await expect.poll(async () => (await snapshot()).settings.color).toBe('#8a42cc');
   await draw({ x: 850, y: 500 }, { x: 960, y: 540 });
   const expected = (await snapshot()).strokes;
-  expect(expected[1].color).toBe('#8a42cc');
+  expect(expected).toHaveLength(3);
+  expect(expected.at(-1).color).toBe('#8a42cc');
   await closeGracefully();
   expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toEqual(expected);
   await launch();
   expect((await snapshot()).settings.color).toBe('#8a42cc');
   expect((await snapshot()).strokes).toEqual(expected);
+});
+
+test('pen types and extra broad width preserve style and give pressure a pronounced visible range', async ({}, testInfo) => {
+  for (const [index, penType] of ['pen', 'pencil', 'fountain', 'marker'].entries()) {
+    await openPenControls();
+    await page.getByLabel('Pen type', { exact: true }).selectOption(penType);
+    await clickPenControl('[data-width="12"]');
+    const y = 200 + index * 100;
+    await pointer('pointerdown', 300, y, { pressure: 0.1 });
+    await pointer('pointermove', 380, y, { pressure: 0.1 });
+    await pointer('pointermove', 460, y, { pressure: 0.9 });
+    await pointer('pointermove', 540, y, { pressure: 0.9 });
+    await pointer('pointerup', 540, y, { pressure: 0, buttons: 0 });
+    const stroke = (await snapshot()).strokes.at(-1);
+    expect(stroke.penType).toBe(penType);
+    expect(stroke.width).toBe(12);
+    expect(Math.min(...stroke.points.map(point => point.p))).toBeCloseTo(0.1, 5);
+    expect(Math.max(...stroke.points.map(point => point.p))).toBeCloseTo(0.9, 5);
+  }
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const thickness = await page.evaluate(() => {
+    const canvas = document.querySelector('#canvas'), paint = canvas.getContext('2d');
+    const ratio = canvas.width / innerWidth;
+    const measure = x => {
+      const column = paint.getImageData(Math.round(x * ratio), Math.round(360 * ratio), 1, Math.round(80 * ratio)).data;
+      let dark = 0;
+      for (let index = 0; index < column.length; index += 4) if (column[index] + column[index + 1] + column[index + 2] < 730) dark++;
+      return dark / ratio;
+    };
+    return { low: measure(320), high: measure(510) };
+  });
+  expect(thickness.low).toBeGreaterThan(0);
+  expect(thickness.high).toBeGreaterThanOrEqual(thickness.low * 3);
+  await testInfo.attach('pressure-thickness', { body: JSON.stringify(thickness), contentType: 'application/json' });
+  await page.screenshot({ path: testInfo.outputPath('pen-types-pressure.png') });
+  const expected = await snapshot();
+  expect(expected.strokes.map(stroke => stroke.penType)).toEqual(['pen', 'pencil', 'fountain', 'marker']);
+  expect(expected.settings.penType).toBe('marker');
+  expect(expected.settings.width).toBe(12);
+  await closeGracefully();
+  expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toEqual(expected.strokes);
+  await launch();
+  expect((await snapshot()).strokes).toEqual(expected.strokes);
+  expect((await snapshot()).settings.penType).toBe('marker');
+  expect((await snapshot()).settings.width).toBe(12);
 });

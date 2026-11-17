@@ -6,3 +6,4 @@
 - Save scrolls separately and restore open tabs; clearing the current scroll must be undoable and leave others untouched.
 - Deleting a scroll must remove it from workspace lists and preserve a recoverable copy without touching other scrolls.
 - Reuse the first free default name (Scroll, Scroll 1, …); closed scrolls reserve names and deleted scrolls do not.
+- Preserve legacy ink appearance and carry pen styles through native files, editing, clipboard, SVG, and PDF.

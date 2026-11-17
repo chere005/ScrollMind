@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { validateSnapshot } from '../src/core/model.mjs';
 
-const { createStore, APPLICATION_ID } = createRequire(import.meta.url)('../src/main/storage.cjs');
+const { createStore, APPLICATION_ID, SCHEMA_VERSION } = createRequire(import.meta.url)('../src/main/storage.cjs');
 const stroke = (id, x = 1) => ({ id, color: '#243743', width: 3, points: [{ x, y: -1250.125, p: 0.1734567890123456 }, { x: x + 10.01, y: -1200.7654321, p: 0.9 }] });
 const document = (id = 'one') => validateSnapshot({ version: 1, strokes: [stroke(id)], markers: [{ id: 'section-1', y: -1300, label: 'Above the start', kind: 'section' }], view: { offsetY: -1500.25 }, settings: { color: '#243743', width: 3, paper: 'dots', paperTone: 'parchment' } });
 
@@ -37,7 +37,7 @@ test('migrates legacy JSON losslessly into identified SQLite and preserves origi
   assert.equal((await fs.readFile(store.filePath)).subarray(0, 16).toString(), 'SQLite format 3\0');
   inspect(store.filePath, (db) => {
     assert.equal(db.prepare('PRAGMA application_id').get().application_id, APPLICATION_ID);
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM strokes').get().n, 1);
   });
 });
@@ -189,7 +189,7 @@ test('readonly import rejects future format without modifying source or current 
   await store.save(document());
   const source = path.join(directory, 'future.sm');
   await store.exportFile(source);
-  inspect(source, (db) => db.exec('PRAGMA user_version=2'));
+  inspect(source, (db) => db.exec('PRAGMA user_version=3'));
   const original = await fs.readFile(source);
   await assert.rejects(store.importFile(source), /unsupported format version/);
   assert.deepEqual(await fs.readFile(source), original);
@@ -238,4 +238,104 @@ test('routine backup failure cannot reject a committed import or incremental sav
   assert.match(warnings[0], /backup maintenance will be retried/);
   await fs.rmdir(store.backupPath);
   await store.close();
+});
+
+function createV1(file, snapshot) {
+  const db = new DatabaseSync(file, { allowExtension: false });
+  try {
+    db.exec(`PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=1;
+      CREATE TABLE strokes (id TEXT PRIMARY KEY, order_index INTEGER NOT NULL, color TEXT NOT NULL, width REAL NOT NULL, points TEXT NOT NULL, bounds TEXT NOT NULL);
+      CREATE TABLE markers (id TEXT PRIMARY KEY, y REAL NOT NULL, label TEXT NOT NULL, kind TEXT NOT NULL);
+      CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+    const add = db.prepare('INSERT INTO strokes VALUES (?,?,?,?,?,?)');
+    snapshot.strokes.forEach((item, index) => add.run(item.id, index, item.color, item.width, JSON.stringify(item.points), JSON.stringify({ x: 0, y: -2000, width: 100, height: 1000 })));
+    const marker = db.prepare('INSERT INTO markers VALUES (?,?,?,?)');
+    for (const item of snapshot.markers) marker.run(item.id, item.y, item.label, item.kind);
+    const metadata = db.prepare('INSERT INTO metadata VALUES (?,?)');
+    metadata.run('view', JSON.stringify(snapshot.view)); metadata.run('settings', JSON.stringify(snapshot.settings));
+  } finally { db.close(); }
+}
+
+test('managed schema1 migrates transactionally to schema2 without changing legacy points or appearance', async (t) => {
+  const { store } = await temporary(t);
+  createV1(store.filePath, document());
+  const originalPoints = inspect(store.filePath, db => db.prepare('SELECT points FROM strokes').get().points);
+  const loaded = await store.load();
+  assert.deepEqual(loaded.document, document());
+  assert.equal(Object.hasOwn(loaded.document.strokes[0], 'penType'), false);
+  inspect(store.filePath, db => {
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+    const column = db.prepare('PRAGMA table_info(strokes)').all().find(item => item.name === 'pen_type');
+    assert.equal(column.notnull, 0);
+    assert.equal(column.dflt_value, 'NULL');
+    const row = db.prepare('SELECT points, pen_type FROM strokes').get();
+    assert.equal(row.points, originalPoints);
+    assert.equal(row.pen_type, null);
+  });
+  assert.equal(inspect(store.backupPath, db => db.prepare('PRAGMA user_version').get().user_version), 2);
+});
+
+test('readonly schema1 import preserves source bytes and omits default pen metadata', async (t) => {
+  const { store, directory } = await temporary(t);
+  await store.load();
+  const source = path.join(directory, 'legacy-import.sm');
+  createV1(source, document('legacy-import'));
+  const original = await fs.readFile(source);
+  assert.deepEqual(await store.importFile(source), document('legacy-import'));
+  assert.deepEqual(await fs.readFile(source), original);
+  assert.equal(inspect(source, db => db.prepare('PRAGMA user_version').get().user_version), 1);
+  assert.equal(inspect(source, db => db.prepare('PRAGMA table_info(strokes)').all().some(item => item.name === 'pen_type')), false);
+});
+
+test('pen-type-only edits update one stroke row while preserving explicit pen versus legacy omission', async (t) => {
+  const { store } = await temporary(t);
+  await store.load();
+  const initial = document();
+  initial.strokes.push({ ...stroke('new-pen', 10), penType: 'pen' });
+  initial.settings.penType = 'pencil';
+  await store.save(initial);
+  inspect(store.filePath, db => db.exec(`CREATE TABLE pen_edits (id TEXT); CREATE TRIGGER pen_update AFTER UPDATE ON strokes BEGIN INSERT INTO pen_edits VALUES (NEW.id); END;`));
+  const changed = { ...initial.strokes[1], penType: 'fountain' };
+  await store.saveChanges({ upserts: [changed], settings: { ...initial.settings, penType: 'fountain' } });
+  assert.deepEqual(inspect(store.filePath, db => db.prepare('SELECT id FROM pen_edits').all().map(row => row.id)), ['new-pen']);
+  const saved = await store.getSnapshot();
+  assert.equal(Object.hasOwn(saved.strokes[0], 'penType'), false);
+  assert.equal(saved.strokes[1].penType, 'fountain');
+  assert.deepEqual(saved.strokes[1].points, initial.strokes[1].points);
+  assert.equal(saved.settings.penType, 'fountain');
+  assert.deepEqual(inspect(store.filePath, db => db.prepare('SELECT id,pen_type FROM strokes ORDER BY order_index').all().map(row => ({ ...row }))), [{ id: 'one', pen_type: null }, { id: 'new-pen', pen_type: 'fountain' }]);
+});
+
+test('all explicit pen styles and legacy ink survive native export, reopening and backup recovery', async (t) => {
+  const { store, fresh, directory } = await temporary(t);
+  await store.load();
+  const styled = document('legacy');
+  styled.strokes.push(...['pen', 'pencil', 'fountain', 'marker'].map(penType => ({ ...stroke(penType), penType })));
+  styled.settings.penType = 'marker';
+  await store.save(styled);
+  assert.deepEqual(await store.getSnapshot(), styled);
+  const exported = path.join(directory, 'styled-export.sm');
+  await store.exportFile(exported);
+  assert.equal(inspect(exported, db => db.prepare('PRAGMA user_version').get().user_version), 2);
+  assert.deepEqual(await store.importFile(exported), styled);
+  await store.close();
+  const reopened = fresh();
+  assert.deepEqual((await reopened.load()).document, styled);
+  await reopened.close();
+  await fs.writeFile(store.filePath, 'damaged primary');
+  const recovered = fresh();
+  const loaded = await recovered.load();
+  assert.equal(loaded.recovered, true);
+  assert.deepEqual(loaded.document, styled);
+});
+
+test('schema1 backup recovery creates a schema2 working scroll with unchanged legacy strokes', async (t) => {
+  const { store } = await temporary(t);
+  await fs.writeFile(store.filePath, 'damaged primary');
+  createV1(store.backupPath, document('legacy-backup'));
+  const loaded = await store.load();
+  assert.equal(loaded.recovered, true);
+  assert.deepEqual(loaded.document, document('legacy-backup'));
+  assert.equal(inspect(store.filePath, db => db.prepare('PRAGMA user_version').get().user_version), 2);
+  assert.equal(inspect(store.filePath, db => db.prepare('SELECT pen_type FROM strokes').get().pen_type), null);
 });

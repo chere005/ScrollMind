@@ -1,10 +1,12 @@
 # ScrollMind
 
-A quiet, infinite sheet for a pen display. The macOS app opens full screen on a connected Wacom display, with pressure-sensitive ink, a small control circle, and an endless page above and below where you started. Hover over the circle for a moment to expand the pen controls; they fold away when you return to the page.
+A quiet, infinite sheet for a pen display. The macOS app opens full screen on a connected Wacom display, with pressure-sensitive ink, a small control circle, and an endless page above and below where you started. Hover over the circle for a moment to expand the pen controls in place; a forgiving margin keeps them open while you choose, and they fold away when you return to the page.
 
 Select **Rectangle** or press **V** to select handwriting. Drag the selected writing to move it. Standard copy, cut, paste, duplicate, undo, redo, and arrow-key nudging work with the mouse and keyboard.
 
-The shape dropdown adds lines, arrows, rectangles, ellipses, and triangles as editable strokes. The color wheel provides custom ink colors with brightness and hex controls, alongside the quick color swatches.
+The shape dropdown adds lines, arrows, rectangles, ellipses, and triangles as editable strokes. Eight quick color swatches sit in one row beside a color wheel for custom ink colors with brightness and hex controls.
+
+Choose Pen, Pencil, Fountain, or Marker, with four widths including extra broad. Pressure has a pronounced effect on new strokes, and each stroke keeps its pen style when saved or exported.
 
 An optional sidebar holds open scrolls, paper settings, navigation, and file controls. Create, name, switch, and close scrolls there; recently closed scrolls can be reopened. The trash button removes a scroll from the workspace and keeps a recoverable copy in `Documents/ScrollMind/Deleted Scrolls`. Each scroll keeps its own writing and undo history while open. Choose plain, dotted, ruled, or square-grid paper in white, ivory, parchment, or dark tones. Add named sections, page breaks, and markers to organize the continuous scroll and jump between places. The sidebar starts hidden so the page stays clear.
 

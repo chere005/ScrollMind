@@ -23,13 +23,18 @@
         <button data-tool="select" title="Rectangle selection (V)" aria-label="Rectangular selection" aria-pressed="false"><svg viewBox="0 0 24 24"><path stroke-dasharray="3 3" d="M4 4h16v16H4Z"/><path d="m14 13 1 8 2-3 3-1Z"/></svg></button>
         <button data-tool="hand" title="Hand (H) · hold Space to pan" aria-label="Hand" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M8 12V6a1.5 1.5 0 0 1 3 0v5-7a1.5 1.5 0 0 1 3 0v7-6a1.5 1.5 0 0 1 3 0v7-4a1.5 1.5 0 0 1 3 0v7c0 4-3 7-7 7-3 0-4-2-6-4l-3-4a1.5 1.5 0 0 1 2-2l2 1Z"/></svg></button>
       </div>
+      <select id="pen-type" aria-label="Pen type" title="Pen type"><option value="pen">Pen</option><option value="pencil">Pencil</option><option value="fountain">Fountain</option><option value="marker">Marker</option></select>
       <select id="shape-select" aria-label="Shape" title="Basic shapes · hold Shift to constrain"><option value="">Shapes</option><option value="line">Line</option><option value="arrow">Arrow</option><option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="triangle">Triangle</option></select>
       <span class="separator"></span>
       <div id="colors" class="colors" role="group" aria-label="Ink color">
+        <button data-color="#171717" class="swatch black" title="Black" aria-label="Black ink" aria-pressed="false"></button>
         <button data-color="#243746" class="swatch ink" title="Graphite" aria-label="Graphite ink" aria-pressed="true"></button>
         <button data-color="#215b9c" class="swatch blue" title="Blue" aria-label="Blue ink" aria-pressed="false"></button>
-        <button data-color="#b94d49" class="swatch red" title="Red" aria-label="Red ink" aria-pressed="false"></button>
         <button data-color="#397762" class="swatch green" title="Green" aria-label="Green ink" aria-pressed="false"></button>
+        <button data-color="#b94d49" class="swatch red" title="Red" aria-label="Red ink" aria-pressed="false"></button>
+        <button data-color="#d67b2a" class="swatch orange" title="Orange" aria-label="Orange ink" aria-pressed="false"></button>
+        <button data-color="#8055a5" class="swatch purple" title="Purple" aria-label="Purple ink" aria-pressed="false"></button>
+        <button data-color="#ffffff" class="swatch white" title="White" aria-label="White ink" aria-pressed="false"></button>
         <button id="color-wheel-toggle" title="Color palette wheel" aria-label="Color palette wheel" aria-expanded="false" aria-controls="color-picker"><span class="wheel-icon"></span></button>
       </div>
       <span class="separator"></span>
@@ -37,6 +42,7 @@
         <button data-width="1.5" title="Fine" aria-label="Fine pen" aria-pressed="false"><span class="fine"></span></button>
         <button data-width="3" title="Medium" aria-label="Medium pen" aria-pressed="true"><span class="medium"></span></button>
         <button data-width="6" title="Bold" aria-label="Bold pen" aria-pressed="false"><span class="bold"></span></button>
+        <button data-width="12" title="Broad" aria-label="Broad pen" aria-pressed="false"><span class="broad"></span></button>
       </div>
       <span class="separator"></span>
       <button id="undo" title="Undo (⌘ Z)" aria-label="Undo" disabled><svg viewBox="0 0 24 24"><path d="m9 6-5 5 5 5M4 11h10a6 6 0 0 1 6 6"/></svg></button>

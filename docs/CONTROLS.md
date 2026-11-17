@@ -30,11 +30,13 @@ The selection tool uses a rectangle by default. A rectangle that crosses a strok
 
 ## Pen controls, shapes and colors
 
-The small circle at the top of the page expands after a 200 ms hover. Move from it into the controls to choose a tool, color, or pen size. The controls collapse after you leave; clicking or focusing the circle opens them immediately. A focused brightness slider keeps the color picker available while you adjust it.
+The small circle at the top of the page expands in place after a 200 ms hover. Choose a tool, color, or pen size from the controls that cover it. Small slips outside the controls keep them open; moving farther away closes them after half a second. Clicking or focusing the circle opens them immediately. A focused brightness slider keeps the color picker available while you adjust it.
 
 The shape dropdown offers **Line**, **Arrow**, **Rectangle**, **Ellipse**, and **Triangle**. Choose a shape, then drag in either direction on the page to draw it. Hold Shift for straight angles, squares, circles, or an equilateral triangle. Shapes are ordinary editable strokes: select, move, copy, resize, or undo them with the same controls as handwriting.
 
-Open the color wheel to choose hue and saturation, adjust brightness with the slider, or enter a six-digit hex color. The quick color swatches remain available. Your chosen color saves with the scroll and applies to new ink and shapes.
+The **Pen type** dropdown offers **Pen**, **Pencil**, **Fountain**, and **Marker**. Four widths run from fine through extra broad. Pen pressure produces a pronounced range from light, fine marks to heavy strokes; the selected type and width save with the scroll. Existing writing keeps its original appearance when you change tools.
+
+Choose from eight quick color swatches in one row, or open the color wheel to choose hue and saturation, adjust brightness with the slider, or enter a six-digit hex color. Your chosen color saves with the scroll and applies to new ink and shapes.
 
 ## Paper and navigation
 
@@ -66,7 +68,7 @@ Open the sidebar or File menu to save a copy or open another scroll.
 
 | Format | Contents |
 | --- | --- |
-| `.sm` | Editable scroll, including stroke points and pressure, colors, paper settings, sections, and markers |
+| `.sm` | Editable scroll, including stroke points, pressure, pen types, colors, paper settings, sections, and markers |
 | `.svg` | Vector artwork for the continuous scroll, without app controls |
 | `.pdf` | Paginated document for sharing or printing, with manual page breaks respected |
 

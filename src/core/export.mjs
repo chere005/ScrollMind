@@ -1,4 +1,5 @@
 import { boundsOf, validateSnapshot } from './model.mjs';
+import { brushWidth, brushCap } from './brushes.mjs';
 
 const PADDING = 32;
 const MAX_PAGES = 500;
@@ -68,7 +69,6 @@ function displayColor(color, paperTone) {
   return ({ '#243746': '#e5eaf1', '#242a35': '#e5eaf1', '#215b9c': '#7db3ee', '#b94d49': '#ed9690', '#397762': '#8bc7a9' })[color] || color;
 }
 
-const diameter = (width, pressure) => Math.max(0.35, width * (0.3 + pressure * 1.25));
 let texture;
 function parchmentPaths() {
   if (texture) return texture;
@@ -129,22 +129,29 @@ function markers(document, rect, bottom = rect.y + rect.height, { pdf = false, f
 function strokeSVG(stroke, settings, resourceBudget, minY = -Infinity, maxY = Infinity) {
   const points = stroke.points;
   const color = displayColor(stroke.color, settings.paperTone);
+  const cap = brushCap(stroke.penType);
   const pieces = [];
   if (points.length === 1) {
     const point = points[0];
-    const radius = diameter(stroke.width, point.p) / 2;
-    if (point.y + radius >= minY && point.y - radius <= maxY) pieces.push(resourceBudget.add(`<circle cx="${n(point.x)}" cy="${n(point.y)}" r="${n(radius)}" fill="${color}" stroke="none"/>`, 1));
+    const size = brushWidth(stroke.width, point.p, stroke.penType), radius = size / 2;
+    if (point.y + radius >= minY && point.y - radius <= maxY) {
+      const tap = cap === 'square'
+        ? `<rect x="${n(point.x - radius)}" y="${n(point.y - radius)}" width="${n(size)}" height="${n(size)}" fill="${color}" stroke="none"/>`
+        : `<circle cx="${n(point.x)}" cy="${n(point.y)}" r="${n(radius)}" fill="${color}" stroke="none"/>`;
+      pieces.push(resourceBudget.add(tap, 1));
+    }
   } else {
     for (let index = 1; index < points.length; index++) {
       const a = points[index - 1], b = points[index];
-      const size = diameter(stroke.width, (a.p + b.p) / 2);
-      if (Math.max(a.y, b.y) + size / 2 < minY || Math.min(a.y, b.y) - size / 2 > maxY) continue;
-      // Each segment is a separate round-cap path, matching the live canvas exactly.
+      const size = brushWidth(stroke.width, (a.p + b.p) / 2, stroke.penType, Math.atan2(b.y - a.y, b.x - a.x));
+      const reach = cap === 'square' ? size / Math.SQRT2 : size / 2;
+      if (Math.max(a.y, b.y) + reach < minY || Math.min(a.y, b.y) - reach > maxY) continue;
+      // Segment widths and nib caps match the live canvas.
       pieces.push(resourceBudget.add(`<path d="M${n(a.x)} ${n(a.y)}L${n(b.x)} ${n(b.y)}" stroke-width="${n(size)}"/>`, 1));
     }
   }
   if (!pieces.length) return '';
-  return `<g data-stroke-id="${xml(stroke.id)}" fill="none" stroke="${color}" stroke-linecap="round" stroke-linejoin="round">${pieces.join('')}</g>`;
+  return `<g data-stroke-id="${xml(stroke.id)}"${stroke.penType ? ` data-pen-type="${xml(stroke.penType)}"` : ''} fill="none" stroke="${color}" stroke-linecap="${cap}" stroke-linejoin="round">${pieces.join('')}</g>`;
 }
 
 /** One portable vector image containing every stroke, independent of the current viewport. */
