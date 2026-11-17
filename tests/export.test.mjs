@@ -61,7 +61,7 @@ test('paper colors, continuous world-space ruling, and safe marker text are pres
   assert.doesNotMatch(svg, /<script>|\u0000/);
   assert.match(svg, /<title>A &amp; B<\/title>/);
   const parchment = exportSVG(snapshot([], [], { paperTone: 'parchment', paper: 'dots' }));
-  assert.match(parchment, /fill="#eee0bf"/);
+  assert.match(parchment, /fill="#f1e9d8"/);
   assert.match(parchment, /scroll-texture/);
   assert.match(parchment, /scroll-ruling/);
   assert.match(parchment, /r="0\.8" fill="[^"]+" opacity="0\.8"/);

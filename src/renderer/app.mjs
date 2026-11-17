@@ -30,7 +30,7 @@ const penControls = createPenControls({
 });
 const tones = {
   ivory: { background: '#faf8f2', line: '#c5c6bc', marker: '#71879a' },
-  parchment: { background: '#eee0bf', line: '#b5a47d', marker: '#8a7759' },
+  parchment: { background: '#f1e9d8', line: '#b9ae98', marker: '#8a7e69' },
   white: { background: '#ffffff', line: '#c4cdd5', marker: '#71879a' },
   night: { background: '#172c40', line: '#47637b', marker: '#89a9c5' },
 };
@@ -101,7 +101,7 @@ function paperTexture() {
   for (let index = 0; index < 1800; index++) {
     seed = (seed * 1664525 + 1013904223) >>> 0; const x = seed % 128;
     seed = (seed * 1664525 + 1013904223) >>> 0;
-    paint.fillStyle = index % 2 ? '#77562709' : '#fff8e327'; paint.fillRect(x, seed % 128, 1, 1);
+    paint.fillStyle = index % 2 ? '#82735b09' : '#fffdf527'; paint.fillRect(x, seed % 128, 1, 1);
   }
   parchmentTexture = ctx.createPattern(tile, 'repeat'); return parchmentTexture;
 }

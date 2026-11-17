@@ -8,7 +8,7 @@ const MAX_EXPORT_SEGMENTS = 1_000_000;
 const LETTER = Object.freeze({ width: 816, height: 1056, margin: 48, innerWidth: 720, innerHeight: 960 });
 const TONES = Object.freeze({
   ivory: { background: '#faf8f2', line: '#c5c6bc', marker: '#71879a' },
-  parchment: { background: '#eee0bf', line: '#b5a47d', marker: '#8a7759' },
+  parchment: { background: '#f1e9d8', line: '#b9ae98', marker: '#8a7e69' },
   white: { background: '#ffffff', line: '#c4cdd5', marker: '#71879a' },
   night: { background: '#172c40', line: '#47637b', marker: '#89a9c5' },
 });
@@ -80,7 +80,7 @@ function parchmentPaths() {
     seed = (seed * 1664525 + 1013904223) >>> 0;
     (index % 2 ? dark : light).push(`M${x} ${seed % 128}h1v1h-1Z`);
   }
-  texture = `<path fill="#775627" fill-opacity="${n(9 / 255)}" d="${dark.join('')}"/><path fill="#fff8e3" fill-opacity="${n(39 / 255)}" d="${light.join('')}"/>`;
+  texture = `<path fill="#82735b" fill-opacity="${n(9 / 255)}" d="${dark.join('')}"/><path fill="#fffdf5" fill-opacity="${n(39 / 255)}" d="${light.join('')}"/>`;
   return texture;
 }
 
