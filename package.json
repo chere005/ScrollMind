@@ -1,7 +1,7 @@
 {
   "name": "scrollmind",
   "productName": "ScrollMind",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A quiet, infinite sheet for your pen display.",
   "private": true,
   "main": "src/main/main.cjs",
@@ -30,6 +30,14 @@
       "category": "public.app-category.productivity",
       "identity": null,
       "target": "dir"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": "sm",
+        "name": "ScrollMind Scroll",
+        "role": "Editor",
+        "mimeType": "application/x-scrollmind"
+      }
+    ]
   }
 }

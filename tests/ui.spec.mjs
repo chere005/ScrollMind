@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
@@ -10,7 +11,13 @@ let page;
 let dataDir;
 
 async function launch() {
-  const env = { ...process.env, SCROLLMIND_TEST: '1', SCROLLMIND_DATA_DIR: dataDir };
+  const env = {
+    ...process.env,
+    SCROLLMIND_TEST: '1',
+    SCROLLMIND_DATA_DIR: dataDir,
+    SCROLLMIND_EXPORT_DIR: resolve(dataDir, 'Exports'),
+    SCROLLMIND_OPEN_PATH: '__cancel__',
+  };
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ args: [root, '--smoke-test'], cwd: root, env });
   page = await app.firstWindow();
@@ -37,6 +44,32 @@ async function closeGracefully() {
 
 async function snapshot() {
   return page.evaluate(() => window.scrollmindDebug.getSnapshot());
+}
+
+function readNativeScroll(file) {
+  const database = new DatabaseSync(file, { readOnly: true });
+  try {
+    expect(database.prepare('PRAGMA quick_check').get().quick_check).toBe('ok');
+    expect(database.prepare('PRAGMA application_id').get().application_id).toBe(0x534d4e44);
+    expect(database.prepare('PRAGMA user_version').get().user_version).toBe(1);
+    const metadata = Object.fromEntries(database.prepare('SELECT key, value FROM metadata').all().map(row => [row.key, JSON.parse(row.value)]));
+    return {
+      version: 1,
+      strokes: database.prepare('SELECT id, color, width, points FROM strokes ORDER BY order_index').all().map(row => ({ ...row, points: JSON.parse(row.points) })),
+      markers: database.prepare('SELECT id, y, label, kind FROM markers ORDER BY y, rowid').all().map(row => ({ ...row })),
+      view: metadata.view,
+      settings: metadata.settings,
+    };
+  } finally {
+    database.close();
+  }
+}
+
+async function exportedPath(extension) {
+  const directory = resolve(dataDir, 'Exports');
+  await expect.poll(async () => (await readdir(directory).catch(() => [])).filter(name => name.endsWith(`.${extension}`)).length).toBe(1);
+  const [name] = (await readdir(directory)).filter(name => name.endsWith(`.${extension}`));
+  return resolve(directory, name);
 }
 
 async function selection() {
@@ -204,7 +237,7 @@ test('optional sidebar styles paper and saves sections, page breaks and writing 
   const expected = await snapshot();
 
   await closeGracefully();
-  const saved = JSON.parse(await readFile(resolve(dataDir, 'notebook.scrollmind.json'), 'utf8'));
+  const saved = readNativeScroll(resolve(dataDir, 'scroll.sm'));
   expect(saved.strokes).toHaveLength(1);
   expect(saved.markers).toEqual(expected.markers);
   expect(saved.settings.paperTone).toBe('parchment');
@@ -223,16 +256,117 @@ test('opening a damaged primary recovers visible writing and preserves the damag
   await draw();
   const expected = await snapshot();
   await closeGracefully();
-  await writeFile(resolve(dataDir, 'notebook.backup.json'), JSON.stringify(expected));
-  await writeFile(resolve(dataDir, 'notebook.scrollmind.json'), '{damaged notebook');
+  await copyFile(resolve(dataDir, 'scroll.sm'), resolve(dataDir, 'scroll.backup.sm'));
+  await writeFile(resolve(dataDir, 'scroll.sm'), 'damaged scroll');
   await launch();
   expect((await snapshot()).strokes).toEqual(expected.strokes);
   await expect(page.locator('#status')).toContainText('Recovered');
-  expect((await readdir(dataDir)).some(name => name.startsWith('notebook.corrupt-'))).toBe(true);
+  expect((await readdir(dataDir)).some(name => name.startsWith('scroll.sm.corrupt-'))).toBe(true);
 
   await draw({ x: 520, y: 400 }, { x: 700, y: 450 });
   await closeGracefully();
-  const saved = JSON.parse(await readFile(resolve(dataDir, 'notebook.scrollmind.json'), 'utf8'));
+  const saved = readNativeScroll(resolve(dataDir, 'scroll.sm'));
   expect(saved.strokes).toHaveLength(2);
   expect(saved.strokes[0]).toEqual(expected.strokes[0]);
+});
+
+test('exports independent editable SM, vector SVG and paginated PDF, then reopens the SM for editing', async () => {
+  await page.locator('[data-tool="pen"]').click();
+  await pointer('pointerdown', 380, 250, { pressure: 0.2 });
+  await pointer('pointermove', 430, 270, { pressure: 0.8 });
+  await pointer('pointerup', 430, 270, { pressure: 0, buttons: 0 });
+  await page.locator('#sidebar-toggle').click();
+  await page.locator('#add-section').click();
+  await page.locator('#add-marker').click();
+  await page.locator('#add-page-break').click();
+  await page.locator('#sidebar-toggle').click();
+  await draw({ x: 520, y: 620 }, { x: 700, y: 650 });
+  const expected = await snapshot();
+  await page.locator('#sidebar-toggle').click();
+
+  await page.locator('#export-sm').click();
+  const nativeFile = await exportedPath('sm');
+  expect((await readFile(nativeFile)).subarray(0, 16).toString()).toBe('SQLite format 3\0');
+  // Open read-only while ScrollMind is running: the copy must not depend on a live WAL.
+  const exported = readNativeScroll(nativeFile);
+  expect(exported.strokes).toEqual(expected.strokes);
+  expect(exported.markers).toEqual(expected.markers);
+  expect(exported.settings).toEqual(expected.settings);
+  expect((await readdir(resolve(dataDir, 'Exports'))).some(name => name.endsWith('-wal'))).toBe(false);
+
+  await page.locator('#export-svg').click();
+  const svg = await readFile(await exportedPath('svg'), 'utf8');
+  expect(svg).toMatch(/<svg\b/);
+  expect(svg).toMatch(/<path\b/);
+  expect(svg).not.toMatch(/<image\b|<foreignObject\b|<script\b|id=["']toolbar["']/i);
+  const vectorContent = await page.evaluate(source => {
+    const document = new DOMParser().parseFromString(source, 'image/svg+xml');
+    return { errors: document.querySelectorAll('parsererror').length, paths: document.querySelectorAll('path').length };
+  }, svg);
+  expect(vectorContent.errors).toBe(0);
+  expect(vectorContent.paths).toBeGreaterThan(1);
+
+  await page.locator('#export-pdf').click();
+  const pdf = await readFile(await exportedPath('pdf'));
+  expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  expect([...pdf.toString('latin1').matchAll(/\/Type\s*\/Page\b/g)]).toHaveLength(2);
+
+  await page.locator('#sidebar-toggle').click();
+  await draw({ x: 800, y: 500 }, { x: 900, y: 540 });
+  expect((await snapshot()).strokes).toHaveLength(3);
+  await app.evaluate((_electron, path) => { process.env.SCROLLMIND_OPEN_PATH = path; }, nativeFile);
+  await page.locator('#sidebar-toggle').click();
+  await page.locator('#open-sm').click();
+  await expect.poll(async () => (await snapshot()).strokes.length).toBe(2);
+  const archiveDirectory = resolve(dataDir, 'Saved Scrolls');
+  const archivedFiles = (await readdir(archiveDirectory)).filter(name => name.endsWith('.sm'));
+  expect(archivedFiles).toHaveLength(1);
+  expect(readNativeScroll(resolve(archiveDirectory, archivedFiles[0])).strokes).toHaveLength(3);
+  expect(readNativeScroll(nativeFile).strokes).toEqual(expected.strokes);
+  expect((await snapshot()).strokes).toEqual(expected.strokes);
+  expect((await snapshot()).markers).toEqual(expected.markers);
+  expect(await selection()).toEqual([]);
+  await expect(page.locator('#undo')).toBeDisabled();
+
+  await app.evaluate(() => { process.env.SCROLLMIND_OPEN_PATH = '__cancel__'; delete process.env.SCROLLMIND_EXPORT_DIR; });
+  const canceledOpen = await page.evaluate(() => window.scrollmind.openDocument());
+  const canceledExport = await page.evaluate(() => window.scrollmind.exportDocument('sm', { width: innerWidth, height: innerHeight }));
+  expect(canceledOpen.canceled).toBe(true);
+  expect(canceledExport.canceled).toBe(true);
+  expect((await snapshot()).strokes).toEqual(expected.strokes);
+
+  await page.locator('#sidebar-toggle').click();
+  await draw({ x: 750, y: 520 }, { x: 850, y: 560 });
+  expect((await snapshot()).strokes).toHaveLength(3);
+  await closeGracefully();
+  expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toHaveLength(3);
+});
+
+test('legacy JSON migrates losslessly to SQLite while the original file is preserved', async () => {
+  await closeGracefully();
+  await rm(resolve(dataDir, 'scroll.sm'), { force: true });
+  await rm(resolve(dataDir, 'scroll.backup.sm'), { force: true });
+  const legacy = {
+    version: 1,
+    strokes: [{
+      id: 'legacy-stroke', color: '#215b9c', width: 3,
+      points: [{ x: 120, y: -350, p: 0.15 }, { x: 220, y: -300, p: 0.85 }],
+    }],
+    markers: [
+      { id: 'legacy-section', y: -400, label: 'Previous thoughts', kind: 'section' },
+      { id: 'legacy-break', y: 450, label: 'Next page', kind: 'page-break' },
+    ],
+    view: { offsetY: -450 },
+    settings: { color: '#215b9c', width: 3, paper: 'ruled', paperTone: 'parchment' },
+  };
+  const legacyText = `${JSON.stringify(legacy)}\n`;
+  const legacyFile = resolve(dataDir, 'notebook.scrollmind.json');
+  await writeFile(legacyFile, legacyText);
+  await launch();
+  expect(await snapshot()).toEqual(legacy);
+  expect(readNativeScroll(resolve(dataDir, 'scroll.sm'))).toEqual(legacy);
+  expect(await readFile(legacyFile, 'utf8')).toBe(legacyText);
+  await closeGracefully();
+  await launch();
+  expect(await snapshot()).toEqual(legacy);
 });

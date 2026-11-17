@@ -4,6 +4,7 @@ const { app, BrowserWindow, Menu, ipcMain, screen, clipboard, shell, dialog, ses
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { createStore } = require('./storage.cjs');
+const { createDocumentIO } = require('./document-io.cjs');
 
 app.setName('ScrollMind');
 const testing = process.env.SCROLLMIND_TEST === '1' || process.argv.includes('--smoke-test');
@@ -14,6 +15,8 @@ app.setAppLogsPath(path.join(dataDirectory, 'Logs'));
 
 let window;
 let store;
+let documents;
+let pendingOpenPath = null;
 let closing = false;
 let allowClose = false;
 let testClipboard = '';
@@ -62,6 +65,9 @@ function createMenu() {
       { label: 'Quit ScrollMind', accelerator: 'Cmd+Q', click: requestClose },
     ] }] : []),
     { label: 'File', submenu: [
+      action('Open Scroll…', 'open-sm'),
+      { label: 'Export Scroll', submenu: [action('ScrollMind (.sm)…', 'export-sm'), action('SVG (.svg)…', 'export-svg'), action('PDF (.pdf)…', 'export-pdf')] },
+      { type: 'separator' },
       { label: 'Open Writing Folder', click: async () => { await fs.mkdir(dataDirectory, { recursive: true }); await shell.openPath(dataDirectory); } },
       { type: 'separator' },
       { label: 'Close', accelerator: 'CmdOrCtrl+W', click: requestClose },
@@ -97,6 +103,13 @@ function installHandlers() {
   }
   handle('notebook:load', () => store.load());
   handle('notebook:save', (document) => store.save(document));
+  handle('scroll:save-changes', (changes) => store.saveChanges(changes));
+  handle('scroll:export', (format, options) => documents.exportDocument(format, options));
+  handle('scroll:open', () => {
+    const file = pendingOpenPath;
+    pendingOpenPath = null;
+    return documents.openDocument(file);
+  });
   handle('clipboard:read', () => testing ? testClipboard : clipboard.readText());
   handle('clipboard:write', (text) => {
     if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 32 * 1024 * 1024) throw new Error('The selection is too large to copy.');
@@ -114,6 +127,7 @@ function installHandlers() {
       return false;
     }
     await store.flush();
+    await store.close();
     allowClose = true;
     window.close();
     return true;
@@ -140,6 +154,7 @@ function installHandlers() {
 async function createWindow() {
   const { validateSnapshot } = await import('../core/model.mjs');
   store = createStore(dataDirectory, { validate: validateSnapshot });
+  documents = createDocumentIO({ getStore: () => store, getWindow: () => window, dataDirectory, testing });
   const display = preferredDisplay();
   window = new BrowserWindow({
     ...(testing ? { width: 1280, height: 800 } : display.bounds),
@@ -165,6 +180,7 @@ async function createWindow() {
   window.webContents.on('did-finish-load', () => {
     rendererReady = true;
     if (pendingClose) { pendingClose = false; setImmediate(requestClose); }
+    if (pendingOpenPath) setImmediate(() => send('open-sm'));
   });
   window.webContents.on('render-process-gone', async (_event, details) => {
     if (allowClose || !window || window.isDestroyed()) return;
@@ -198,9 +214,18 @@ async function createWindow() {
 }
 
 const ownsInstance = testing || app.requestSingleInstanceLock();
+app.on('open-file', (event, file) => {
+  event.preventDefault();
+  pendingOpenPath = file;
+  if (rendererReady) send('open-sm');
+});
 if (!ownsInstance) app.quit();
 else {
-  app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
+  app.on('second-instance', (_event, argv) => {
+    const file = argv.find(value => value.toLowerCase().endsWith('.sm'));
+    if (file) { pendingOpenPath = file; if (rendererReady) send('open-sm'); }
+    if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
+  });
   app.on('before-quit', (event) => { if (window && !allowClose) { event.preventDefault(); requestClose(); } });
   app.whenReady().then(async () => {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));

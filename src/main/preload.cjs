@@ -12,6 +12,9 @@ function subscribe(channel, callback) {
 contextBridge.exposeInMainWorld('scrollmind', Object.freeze({
   load: () => ipcRenderer.invoke('notebook:load'),
   save: (document) => ipcRenderer.invoke('notebook:save', document),
+  saveChanges: (changes) => ipcRenderer.invoke('scroll:save-changes', changes),
+  exportDocument: (format, options) => ipcRenderer.invoke('scroll:export', format, options),
+  openDocument: () => ipcRenderer.invoke('scroll:open'),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
   toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),

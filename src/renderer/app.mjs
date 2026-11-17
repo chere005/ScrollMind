@@ -1,24 +1,26 @@
-import { Notebook, boundsOf, makeStroke, strokeHitsPoint, strokeIntersectsRect, validateStrokes } from '../core/model.mjs';
+import { Notebook as Scroll, boundsOf, makeStroke, strokeHitsPoint, strokeIntersectsRect, validateStrokes } from '../core/model.mjs';
 
 const $ = selector => document.querySelector(selector);
 const bridge = window.scrollmind;
 const canvas = $('#canvas'), overlay = $('#overlay');
 const ctx = canvas.getContext('2d', { alpha: false }), ink = overlay.getContext('2d');
 const status = $('#status');
-let notebook = new Notebook();
+let scroll = new Scroll();
 let settings = { color: '#243746', width: 3, paper: 'plain', paperTone: 'ivory' };
 let offsetY = 0, tool = 'pen', selection = new Set(), active = null;
 let spaceDown = false, loaded = false, loadError = null;
 let width = innerWidth, height = innerHeight, ratio = devicePixelRatio || 1;
 let revision = 0, savedRevision = 0, saveTimer, savePromise, frame, baseDirty = true;
 let pasteCount = 0, clipboardSource = '';
+let fileOperation = null;
+let clipboardQueue = Promise.resolve();
 const tones = {
   ivory: { background: '#faf8f2', line: '#c5c6bc', marker: '#71879a' },
   parchment: { background: '#eee0bf', line: '#b5a47d', marker: '#8a7759' },
   white: { background: '#ffffff', line: '#c4cdd5', marker: '#71879a' },
   night: { background: '#172c40', line: '#47637b', marker: '#89a9c5' },
 };
-function snapshot() { return notebook.snapshot({ offsetY }, settings); }
+function snapshot() { return scroll.snapshot({ offsetY }, settings); }
 function message(text, error = false) {
   status.textContent = text;
   status.classList.toggle('error', error);
@@ -36,17 +38,23 @@ async function flushSave() {
   if (savePromise) { await savePromise; if (savedRevision < revision) return flushSave(); return; }
   if (savedRevision === revision) return;
   savePromise = (async () => {
-    while (savedRevision < revision) { const writingRevision = revision; await bridge.save(snapshot()); savedRevision = writingRevision; }
+    while (savedRevision < revision) {
+      const writingRevision = revision;
+      const { token, ...changes } = scroll.pendingChanges();
+      await bridge.saveChanges({ ...changes, view: { offsetY }, settings });
+      scroll.acknowledgeChanges(token);
+      savedRevision = writingRevision;
+    }
     message('Saved');
   })();
   try { await savePromise; }
   catch (error) { message('Couldn’t save · open writing folder', true); throw error; }
   finally { savePromise = null; }
 }
-function selectedStrokes() { return [...selection].map(id => notebook.get(id)).filter(Boolean); }
+function selectedStrokes() { return [...selection].map(id => scroll.get(id)).filter(Boolean); }
 function updateControls() {
-  selection = new Set([...selection].filter(id => notebook.get(id)));
-  $('#undo').disabled = !notebook.canUndo; $('#redo').disabled = !notebook.canRedo;
+  selection = new Set([...selection].filter(id => scroll.get(id)));
+  $('#undo').disabled = !scroll.canUndo; $('#redo').disabled = !scroll.canRedo;
   document.querySelectorAll('[data-tool]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
   document.querySelectorAll('[data-color]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.color === settings.color)));
   document.querySelectorAll('[data-width]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.width) === settings.width)));
@@ -95,7 +103,7 @@ function drawPaper() {
     ctx.stroke();
   }
   ctx.globalAlpha = 1; ctx.setTransform(ratio, 0, 0, ratio, 0, -offsetY * ratio);
-  for (const marker of notebook.markers) {
+  for (const marker of scroll.markers) {
     if (marker.y < offsetY - 30 || marker.y > offsetY + height + 30) continue;
     ctx.save(); ctx.strokeStyle = tone.marker; ctx.fillStyle = tone.marker; ctx.lineWidth = 1;
     if (marker.kind === 'marker') {
@@ -142,7 +150,7 @@ function render() {
   const preview = transform ? selectedStrokes().map(stroke => transformStroke(stroke, transform)) : null;
   if (baseDirty) {
     baseDirty = false; drawPaper();
-    for (const stroke of notebook.query({ x: -100, y: offsetY - 100, width: width + 200, height: height + 200 })) if (!(transform && selection.has(stroke.id))) drawStroke(ctx, stroke);
+    for (const stroke of scroll.query({ x: -100, y: offsetY - 100, width: width + 200, height: height + 200 })) if (!(transform && selection.has(stroke.id))) drawStroke(ctx, stroke);
     if (preview) for (const stroke of preview) drawStroke(ctx, stroke);
   }
   ink.setTransform(1, 0, 0, 1, 0, 0); ink.clearRect(0, 0, overlay.width, overlay.height); ink.setTransform(ratio, 0, 0, ratio, 0, -offsetY * ratio);
@@ -179,18 +187,18 @@ function appendPoint(event, pressure) {
 }
 function eraseAt(point) {
   const radius = 12;
-  const hits = notebook.query({ x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 }).filter(stroke => strokeHitsPoint(stroke, point, radius));
-  if (hits.length && notebook.remove(hits.map(stroke => stroke.id))) { active.changed = true; requestRender(); }
+  const hits = scroll.query({ x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 }).filter(stroke => strokeHitsPoint(stroke, point, radius));
+  if (hits.length && scroll.remove(hits.map(stroke => stroke.id))) { active.changed = true; requestRender(); }
 }
 function pointerDown(event) {
-  if (!loaded || loadError || event.pointerType === 'touch' || active) return;
+  if (!loaded || loadError || fileOperation || event.pointerType === 'touch' || active) return;
   $('#context-menu').hidden = true;
   if (event.button === 2 && event.pointerType !== 'pen') return;
   const currentTool = eventTool(event); if (currentTool !== 'hand' && !contact(event)) return;
   event.preventDefault(); overlay.focus({ preventScroll: true }); capture(event);
   const point = world(event);
   if (currentTool === 'hand') active = { kind: 'pan', pointerId: event.pointerId, initialY: event.clientY, initialOffset: offsetY, temporary: tool !== 'hand' };
-  else if (currentTool === 'eraser') { notebook.beginGroup(); active = { kind: 'erase', pointerId: event.pointerId, changed: false, previous: point }; eraseAt(point); }
+  else if (currentTool === 'eraser') { scroll.beginGroup(); active = { kind: 'erase', pointerId: event.pointerId, changed: false, previous: point }; eraseAt(point); }
   else if (currentTool === 'select') {
     const box = boundsOf(selectedStrokes());
     const corner = box ? corners(box, 7).findIndex(p => Math.hypot(p.x - point.x, p.y - point.y) <= 9) : -1;
@@ -230,13 +238,13 @@ function pointerMove(event) {
 function finishGesture(cancel = false) {
   if (!active) return;
   const gesture = active; active = null; let modified = false;
-  if (gesture.kind === 'ink' && gesture.points.length) modified = notebook.add([makeStroke(gesture.points, gesture.color, gesture.width)]);
-  else if (gesture.kind === 'erase') { notebook.endGroup(); modified = gesture.changed; }
-  else if (!cancel && gesture.kind === 'move' && (Math.abs(gesture.dx) > .1 || Math.abs(gesture.dy) > .1)) modified = notebook.move([...selection], gesture.dx, gesture.dy);
-  else if (!cancel && gesture.kind === 'resize') modified = notebook.transform([...selection], gesture.transform);
+  if (gesture.kind === 'ink' && gesture.points.length) modified = scroll.add([makeStroke(gesture.points, gesture.color, gesture.width)]);
+  else if (gesture.kind === 'erase') { scroll.endGroup(); modified = gesture.changed; }
+  else if (!cancel && gesture.kind === 'move' && (Math.abs(gesture.dx) > .1 || Math.abs(gesture.dy) > .1)) modified = scroll.move([...selection], gesture.dx, gesture.dy);
+  else if (!cancel && gesture.kind === 'resize') modified = scroll.transform([...selection], gesture.transform);
   else if (!cancel && gesture.kind === 'marquee') {
     const box = rectangle(gesture.start, gesture.current); selection = gesture.previousSelection;
-    const hits = box.width < 3 && box.height < 3 ? notebook.query({ x: box.x - 5, y: box.y - 5, width: 10, height: 10 }).filter(stroke => strokeHitsPoint(stroke, gesture.current, 5)).slice(-1) : notebook.query(box).filter(stroke => strokeIntersectsRect(stroke, box));
+    const hits = box.width < 3 && box.height < 3 ? scroll.query({ x: box.x - 5, y: box.y - 5, width: 10, height: 10 }).filter(stroke => strokeHitsPoint(stroke, gesture.current, 5)).slice(-1) : scroll.query(box).filter(stroke => strokeIntersectsRect(stroke, box));
     for (const stroke of hits) selection.add(stroke.id);
   } else if (gesture.kind === 'pan') modified = offsetY !== gesture.initialOffset;
   try { if (overlay.hasPointerCapture(gesture.pointerId)) overlay.releasePointerCapture(gesture.pointerId); } catch {}
@@ -246,16 +254,17 @@ overlay.addEventListener('pointerdown', pointerDown); overlay.addEventListener('
 overlay.addEventListener('pointerup', event => { if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); finishGesture(); } });
 overlay.addEventListener('pointercancel', () => finishGesture(true)); overlay.addEventListener('lostpointercapture', () => finishGesture(true));
 overlay.addEventListener('wheel', event => {
-  event.preventDefault(); if (active || !loaded || loadError) return;
+  event.preventDefault(); if (active || fileOperation || !loaded || loadError) return;
   const multiplier = event.deltaMode === 1 ? 24 : event.deltaMode === 2 ? height : 1; setOffset(offsetY + event.deltaY * multiplier);
 }, { passive: false });
 window.addEventListener('blur', () => { finishGesture(); spaceDown = false; updateCursor(); }); window.addEventListener('resize', resize);
 
 async function copySelection(cut = false) {
   finishGesture(); const strokes = selectedStrokes(); if (!strokes.length) return;
+  const origin = scroll, ids = strokes.map(stroke => stroke.id);
   const text = JSON.stringify({ type: 'scrollmind/strokes', version: 1, strokes });
   await bridge.writeClipboard(text); clipboardSource = text; pasteCount = 0;
-  if (cut) { notebook.remove([...selection]); selection.clear(); changed(); }
+  if (cut && scroll === origin && scroll.remove(ids)) { for (const id of ids) selection.delete(id); changed(); }
 }
 async function pasteSelection() {
   finishGesture(); const text = await bridge.readClipboard(); let data;
@@ -267,30 +276,63 @@ async function pasteSelection() {
   if (bounds.y + dy + bounds.height < offsetY + 80 || bounds.y + dy > offsetY + height - 50) dy = offsetY + height / 2 - bounds.y - bounds.height / 2;
   if (bounds.x + dx > width - 50 || bounds.x + dx + bounds.width < 0) dx = width / 2 - bounds.x - bounds.width / 2;
   const strokes = data.strokes.map(stroke => ({ ...stroke, id: crypto.randomUUID(), points: stroke.points.map(point => ({ ...point, x: point.x + dx, y: point.y + dy })) }));
-  notebook.add(strokes); selection = new Set(strokes.map(stroke => stroke.id)); tool = 'select'; changed();
+  scroll.add(strokes); selection = new Set(strokes.map(stroke => stroke.id)); tool = 'select'; changed();
 }
-function deleteSelection() { finishGesture(); if (notebook.remove([...selection])) { selection.clear(); changed(); } }
+function deleteSelection() { finishGesture(); if (scroll.remove([...selection])) { selection.clear(); changed(); } }
 function duplicateSelection() {
   finishGesture(); const copies = selectedStrokes().map(stroke => ({ ...stroke, id: crypto.randomUUID(), points: stroke.points.map(point => ({ ...point, x: point.x + 24, y: point.y + 24 })) }));
-  if (copies.length) { notebook.add(copies); selection = new Set(copies.map(stroke => stroke.id)); changed(); }
+  if (copies.length) { scroll.add(copies); selection = new Set(copies.map(stroke => stroke.id)); changed(); }
 }
 async function command(value) {
-  if (!loaded || loadError) return;
+  if (!loaded || loadError || fileOperation) return;
+  if (value === 'open-sm' || value.startsWith('export-')) return scrollFileCommand(value);
   if (value.startsWith('tool-')) return setTool(value.slice(5));
-  if (value === 'undo' || value === 'redo') { finishGesture(); if (notebook[value]()) { changed(); renderMarkers(); } }
-  else if (value === 'copy') await copySelection(); else if (value === 'cut') await copySelection(true); else if (value === 'paste') await pasteSelection();
+  if (value === 'undo' || value === 'redo') { finishGesture(); if (scroll[value]()) { changed(); renderMarkers(); } }
+  else if (['copy', 'cut', 'paste'].includes(value)) {
+    const task = clipboardQueue.then(() => value === 'paste' ? pasteSelection() : copySelection(value === 'cut'));
+    clipboardQueue = task.catch(() => {});
+    await task;
+  }
   else if (value === 'duplicate') duplicateSelection(); else if (value === 'delete') deleteSelection();
-  else if (value === 'select-all') { finishGesture(); tool = 'select'; selection = new Set(notebook.strokes.map(stroke => stroke.id)); updateControls(); requestRender(); }
+  else if (value === 'select-all') { finishGesture(); tool = 'select'; selection = new Set(scroll.strokes.map(stroke => stroke.id)); updateControls(); requestRender(); }
   else if (value === 'home') { finishGesture(); setOffset(0); } else if (value === 'fullscreen') await bridge.toggleFullscreen();
   else if (value === 'help') { finishGesture(); $('#help').showModal(); }
   else if (value === 'toggle-toolbar') $('#toolbar').hidden = !$('#toolbar').hidden;
   else if (value === 'toggle-sidebar') toggleSidebar(); else if (value.startsWith('add-')) addMarker(value.slice(4));
+}
+async function scrollFileCommand(value) {
+  if (fileOperation) return fileOperation;
+  finishGesture();
+  document.body.inert = true;
+  fileOperation = (async () => {
+    await clipboardQueue;
+    await flushSave();
+    if (value === 'open-sm') {
+      const result = await bridge.openDocument();
+      if (result.canceled) return;
+      scroll = new Scroll(result.document);
+      settings = { ...result.document.settings };
+      offsetY = result.document.view.offsetY;
+      selection.clear(); active = null; spaceDown = false;
+      revision = savedRevision = 0;
+      clipboardSource = ''; pasteCount = 0;
+      message('Scroll opened · saved locally');
+      updateControls(); renderMarkers(); requestRender();
+    } else {
+      const format = value.slice(7);
+      const result = await bridge.exportDocument(format, { width, height });
+      if (!result.canceled) message(`${format === 'sm' ? 'ScrollMind' : format.toUpperCase()} export saved`);
+    }
+  })();
+  try { return await fileOperation; }
+  finally { fileOperation = null; document.body.inert = false; overlay.focus({ preventScroll: true }); }
 }
 function safely(value) { Promise.resolve(command(value)).catch(error => message(error.message, true)); }
 document.querySelectorAll('[data-tool]').forEach(button => button.addEventListener('click', () => setTool(button.dataset.tool)));
 document.querySelectorAll('[data-color]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.color = button.dataset.color; setTool('pen'); changed(); }));
 document.querySelectorAll('[data-width]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.width = Number(button.dataset.width); changed(); }));
 for (const name of ['undo', 'redo', 'home', 'fullscreen']) $(`#${name}`).addEventListener('click', () => safely(name));
+for (const name of ['open-sm', 'export-sm', 'export-svg', 'export-pdf']) $(`#${name}`).addEventListener('click', () => safely(name));
 $('#controls-link').addEventListener('click', () => safely('help')); $('#help-close').addEventListener('click', () => $('#help').close());
 $('#context-menu').addEventListener('click', event => { const button = event.target.closest('[data-command]'); if (button) { safely(button.dataset.command); $('#context-menu').hidden = true; } });
 overlay.addEventListener('contextmenu', event => {
@@ -301,6 +343,7 @@ overlay.addEventListener('contextmenu', event => {
 document.addEventListener('pointerdown', event => { if (!event.target.closest('#context-menu')) $('#context-menu').hidden = true; });
 function isTextInput(target) { return target instanceof HTMLElement && Boolean(target.closest('input,textarea,select,[contenteditable=true]')); }
 document.addEventListener('keydown', event => {
+  if (fileOperation) return;
   if (isTextInput(event.target) || $('#help').open) return;
   const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase(); let action;
   if (mod) {
@@ -308,6 +351,9 @@ document.addEventListener('keydown', event => {
     else if (key === 'c') action = 'copy'; else if (key === 'x') action = 'cut'; else if (key === 'v') action = 'paste'; else if (key === 'a') action = 'select-all'; else if (key === 'd') action = 'duplicate';
     else if (key === '0') action = 'home'; else if (key === '/') action = 'toggle-sidebar'; else if (key === 'f' && event.shiftKey) action = 'fullscreen';
     else if (key === 'm' && event.shiftKey) action = 'add-marker'; else if (key === 'enter') action = 'add-page-break';
+    else if (key === 'o') action = 'open-sm';
+    else if (key === 'p') action = 'export-pdf';
+    else if (key === 's' && event.shiftKey) action = 'export-sm';
     else if (key === 's') { event.preventDefault(); flushSave().catch(() => {}); return; }
   } else {
     if (key === 'b') action = 'tool-pen'; else if (key === 'e') action = 'tool-eraser'; else if (key === 'v') action = 'tool-select'; else if (key === 'h') action = 'tool-hand';
@@ -318,7 +364,7 @@ document.addEventListener('keydown', event => {
       else if (selection.size) { selection.clear(); updateControls(); requestRender(); } else if (!$('#sidebar').hidden) toggleSidebar(false); else bridge.leaveFullscreen(); return;
     } else if (key.startsWith('arrow')) {
       event.preventDefault(); finishGesture(); const amount = event.shiftKey ? 10 : 1;
-      if (selection.size) { const dx = key === 'arrowleft' ? -amount : key === 'arrowright' ? amount : 0, dy = key === 'arrowup' ? -amount : key === 'arrowdown' ? amount : 0; if (notebook.move([...selection], dx, dy)) changed(); }
+      if (selection.size) { const dx = key === 'arrowleft' ? -amount : key === 'arrowright' ? amount : 0, dy = key === 'arrowup' ? -amount : key === 'arrowdown' ? amount : 0; if (scroll.move([...selection], dx, dy)) changed(); }
       else if (key === 'arrowup' || key === 'arrowdown') setOffset(offsetY + (key === 'arrowup' ? -1 : 1) * (event.shiftKey ? height * .8 : 48)); return;
     } else if (key === 'pagedown' || key === 'pageup') { event.preventDefault(); finishGesture(); setOffset(offsetY + (key === 'pageup' ? -1 : 1) * height * .8); return; }
   }
@@ -332,41 +378,41 @@ function toggleSidebar(show = $('#sidebar').hidden) {
 $('#sidebar-toggle').addEventListener('click', () => toggleSidebar()); $('#sidebar-close').addEventListener('click', () => toggleSidebar(false)); $('#start-link').addEventListener('click', () => setOffset(0));
 function markerLabel(kind) { return kind === 'section' ? 'Section' : kind === 'page-break' ? 'Page break' : 'Marker'; }
 function addMarker(kind) {
-  if (!loaded || loadError || !['section', 'marker', 'page-break'].includes(kind)) return; finishGesture(); const count = notebook.markers.filter(marker => marker.kind === kind).length + 1;
-  notebook.addMarker({ id: crypto.randomUUID(), kind, y: offsetY + height / 2, label: `${markerLabel(kind)} ${count}` }); changed(); renderMarkers();
+  if (!loaded || loadError || fileOperation || !['section', 'marker', 'page-break'].includes(kind)) return; finishGesture(); const count = scroll.markers.filter(marker => marker.kind === kind).length + 1;
+  scroll.addMarker({ id: crypto.randomUUID(), kind, y: offsetY + height / 2, label: `${markerLabel(kind)} ${count}` }); changed(); renderMarkers();
 }
 for (const kind of ['section', 'marker', 'page-break']) $(`#add-${kind}`).addEventListener('click', () => addMarker(kind));
 function renderMarkers() {
-  const list = $('#markers'); list.replaceChildren(); const markers = [...notebook.markers].sort((a, b) => a.y - b.y);
+  const list = $('#markers'); list.replaceChildren(); const markers = [...scroll.markers].sort((a, b) => a.y - b.y);
   $('#markers-empty').hidden = markers.length > 0; $('#marker-count').textContent = markers.length;
   for (const marker of markers) {
     const row = document.createElement('div'); row.className = 'marker-row'; row.dataset.kind = marker.kind;
     const go = document.createElement('button'); go.className = 'marker-go'; go.textContent = marker.kind === 'section' ? '§' : marker.kind === 'page-break' ? '↵' : '◇'; go.title = `Go to ${marker.label}`; go.setAttribute('aria-label', `Go to ${marker.label}`);
     go.addEventListener('click', () => { finishGesture(); setOffset(marker.y - 130); });
     const label = document.createElement('input'); label.value = marker.label; label.maxLength = 200; label.setAttribute('aria-label', `${markerLabel(marker.kind)} name`);
-    label.addEventListener('change', () => { const value = label.value.trim() || markerLabel(marker.kind); label.value = value; if (notebook.updateMarker(marker.id, { label: value })) { changed(); renderMarkers(); } });
+    label.addEventListener('change', () => { const value = label.value.trim() || markerLabel(marker.kind); label.value = value; if (scroll.updateMarker(marker.id, { label: value })) { changed(); renderMarkers(); } });
     label.addEventListener('keydown', event => { if (event.key === 'Enter') { label.blur(); overlay.focus(); } });
     const remove = document.createElement('button'); remove.className = 'marker-remove'; remove.textContent = '×'; remove.title = `Remove ${marker.label}`; remove.setAttribute('aria-label', `Remove ${marker.label}`);
-    remove.addEventListener('click', () => { if (notebook.removeMarker(marker.id)) { changed(); renderMarkers(); } }); row.append(go, label, remove); list.append(row);
+    remove.addEventListener('click', () => { if (scroll.removeMarker(marker.id)) { changed(); renderMarkers(); } }); row.append(go, label, remove); list.append(row);
   }
 }
 $('#paper-tone').addEventListener('change', event => { finishGesture(); settings.paperTone = event.target.value; changed(); }); $('#paper-pattern').addEventListener('change', event => { finishGesture(); settings.paper = event.target.value; changed(); });
 $('#display-select').addEventListener('change', async event => { try { finishGesture(); await bridge.moveToDisplay(event.target.value); } catch (error) { message(error.message, true); } });
 $('#data-folder').addEventListener('click', () => bridge.openDataFolder().catch(error => message(error.message, true)));
-status.addEventListener('click', () => { if (status.classList.contains('error')) bridge.openDataFolder(); }); bridge.onCommand(safely);
+status.addEventListener('click', () => { if (status.classList.contains('error')) bridge.openDataFolder(); }); bridge.onCommand(value => initialization.then(() => safely(value)));
 $('#save-alert').addEventListener('click', () => toggleSidebar(true));
-bridge.onBeforeClose(async () => { try { await initialization; if (!loadError) { finishGesture(); await flushSave(); } await bridge.readyToClose(); } catch (error) { await bridge.readyToClose({ error: error.message }); } });
+bridge.onBeforeClose(async () => { try { await initialization; await fileOperation?.catch(() => {}); await clipboardQueue; if (!loadError) { finishGesture(); await flushSave(); } await bridge.readyToClose(); } catch (error) { await bridge.readyToClose({ error: error.message }); } });
 window.addEventListener('pagehide', () => { finishGesture(); flushSave().catch(() => {}); }); window.addEventListener('error', event => message(event.message || 'Something needs attention', true));
 async function initialize() {
   try {
     const [result, info, displays] = await Promise.all([bridge.load(), bridge.getAppInfo(), bridge.getDisplays()]);
     if (result.error && !result.document) throw new Error(result.error);
-    if (result.document) { notebook = new Notebook(result.document); settings = { ...settings, ...result.document.settings }; offsetY = result.document.view.offsetY; }
+    if (result.document) { scroll = new Scroll(result.document); settings = { ...settings, ...result.document.settings }; offsetY = result.document.view.offsetY; }
     $('#version').textContent = `ScrollMind ${info.version} · First draft`;
     for (const display of displays) { const option = document.createElement('option'); option.value = display.id; option.textContent = display.label; option.selected = display.selected; $('#display-select').append(option); }
     loaded = true;
     if (info.testMode) window.scrollmindDebug = Object.freeze({ getSnapshot: snapshot, getSelection: () => [...selection], getOffsetY: () => offsetY, setOffsetY: value => setOffset(value) });
     message(result.recovered ? 'Recovered from backup · saved locally' : 'Saved'); if (!result.document) changed(); updateControls(); renderMarkers(); resize();
-  } catch (error) { loadError = error.message; message('Couldn’t open notebook · click to open folder', true); console.error(error); }
+  } catch (error) { loadError = error.message; message('Couldn’t open scroll · click to open folder', true); console.error(error); }
 }
 resize(); const initialization = initialize(); await initialization;

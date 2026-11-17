@@ -3,3 +3,4 @@
 body.sidebar-open #sidebar-toggle{left:312px}
 
 .sidebar-status{display:grid;gap:5px;color:var(--quiet);font-size:10px;margin:0 0 14px}#save-alert{position:fixed;right:20px;bottom:20px;z-index:12;padding:12px 16px;border:1px solid #b54c4655;border-radius:10px;background:var(--panel);color:#b54c46;box-shadow:var(--shadow);font-size:12px}
+.scroll-files{border-top:1px solid var(--line);padding-top:22px;margin-top:25px}.scroll-files>button{width:100%;text-align:left;border:1px solid var(--line);padding:10px;border-radius:8px;margin-top:12px;font-size:12px}.file-label{font-size:11px;color:var(--quiet);margin:17px 0 8px}.export-buttons{display:flex;gap:6px}.export-buttons button{border:1px solid var(--line);padding:9px 10px;border-radius:8px;font-size:11px}.export-buttons button:first-child{flex:1}

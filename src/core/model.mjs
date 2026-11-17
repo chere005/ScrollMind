@@ -1,4 +1,4 @@
-// The notebook contains only portable data. Drawing and filesystem APIs live elsewhere.
+// The scroll contains only portable data. Drawing and filesystem APIs live elsewhere.
 const VERSION = 1;
 const BUCKET_HEIGHT = 1024;
 const MAX_BUCKETS_PER_STROKE = 256;
@@ -35,7 +35,7 @@ function color(value) {
 }
 
 function normalizeSettings(value = {}) {
-  if (!record(value)) throw new TypeError('Notebook settings must be an object.');
+  if (!record(value)) throw new TypeError('Scroll settings must be an object.');
   const paper = value.paper ?? DEFAULT_SETTINGS.paper;
   if (!PAPERS.has(paper)) throw new TypeError('Unknown paper style.');
   const paperTone = value.paperTone ?? DEFAULT_SETTINGS.paperTone;
@@ -49,7 +49,7 @@ function normalizeSettings(value = {}) {
 }
 
 function normalizeView(value = {}) {
-  if (!record(value)) throw new TypeError('Notebook view must be an object.');
+  if (!record(value)) throw new TypeError('Scroll view must be an object.');
   return { offsetY: finite(value.offsetY ?? 0, 'Vertical position') };
 }
 
@@ -81,7 +81,7 @@ export function validateStrokes(value) {
   let pointCount = 0;
   return value.map((item) => {
     if (Array.isArray(item?.points)) pointCount += item.points.length;
-    if (pointCount > MAX_TOTAL_POINTS) throw new TypeError('The notebook contains too many pen points.');
+    if (pointCount > MAX_TOTAL_POINTS) throw new TypeError('The scroll contains too many pen points.');
     const stroke = validateStroke(item);
     if (ids.has(stroke.id)) throw new TypeError('Duplicate stroke IDs are not allowed.');
     ids.add(stroke.id);
@@ -100,7 +100,7 @@ function validateMarker(value) {
 }
 
 function validateMarkers(value = []) {
-  if (!Array.isArray(value) || value.length > MAX_MARKERS) throw new TypeError(`A notebook supports up to ${MAX_MARKERS} markers.`);
+  if (!Array.isArray(value) || value.length > MAX_MARKERS) throw new TypeError(`A scroll supports up to ${MAX_MARKERS} markers.`);
   const ids = new Set();
   return value.map((item) => {
     const marker = validateMarker(item);
@@ -112,8 +112,8 @@ function validateMarkers(value = []) {
 
 /** Unknown schemas and corrupt input throw TypeError; callers can preserve the original file. */
 export function validateSnapshot(value) {
-  if (!record(value)) throw new TypeError('A notebook must be an object.');
-  if (value.version !== VERSION) throw new TypeError(`Unsupported notebook version: ${String(value.version)}.`);
+  if (!record(value)) throw new TypeError('A scroll must be an object.');
+  if (value.version !== VERSION) throw new TypeError(`Unsupported scroll version: ${String(value.version)}.`);
   return {
     version: VERSION,
     strokes: validateStrokes(value.strokes),
@@ -272,6 +272,12 @@ export class Notebook {
   #redo = [];
   #group = null;
   #groupDepth = 0;
+  #tracking = false;
+  #changeToken = 0;
+  #dirtyStrokes = new Map();
+  #orderChangedAt = 0;
+  #markersChangedAt = 0;
+  #highestOrder = -1;
 
   constructor(snapshot = {}) {
     if (record(snapshot) && Object.keys(snapshot).length === 0) snapshot = { version: VERSION, strokes: [] };
@@ -280,6 +286,7 @@ export class Notebook {
       this.#put(stroke.id, { stroke: immutable(stroke), order: this.#nextOrder++ });
     }
     for (const marker of validated.markers) this.#markers.set(marker.id, Object.freeze(marker));
+    this.#tracking = true;
   }
 
   get strokes() {
@@ -294,6 +301,30 @@ export class Notebook {
   }
   get canUndo() { return this.#undo.length > 0 || (this.#group?.size ?? 0) > 0; }
   get canRedo() { return this.#redo.length > 0; }
+
+  /** Capture only unsaved edits. Acknowledging an older batch retains newer edits. */
+  pendingChanges() {
+    const upserts = [], removals = [];
+    for (const id of this.#dirtyStrokes.keys()) {
+      const stroke = this.get(id);
+      if (stroke) upserts.push(stroke);
+      else removals.push(id);
+    }
+    return {
+      token: this.#changeToken,
+      upserts,
+      removals,
+      ...(this.#orderChangedAt ? { order: this.strokes.map(stroke => stroke.id) } : {}),
+      ...(this.#markersChangedAt ? { markers: [...this.markers] } : {}),
+    };
+  }
+
+  acknowledgeChanges(token) {
+    if (!Number.isSafeInteger(token) || token < 0 || token > this.#changeToken) throw new TypeError('Invalid save token.');
+    for (const [id, changedAt] of this.#dirtyStrokes) if (changedAt <= token) this.#dirtyStrokes.delete(id);
+    if (this.#orderChangedAt <= token) this.#orderChangedAt = 0;
+    if (this.#markersChangedAt <= token) this.#markersChangedAt = 0;
+  }
 
   #index(id, stroke, add) {
     const bounds = strokeBounds(stroke);
@@ -318,6 +349,14 @@ export class Notebook {
 
   #put(id, entry) {
     const previous = this.#entries.get(id);
+    if (this.#tracking) {
+      const token = ++this.#changeToken;
+      // Appends and removals keep relative order; only restoring older ink needs it sent.
+      const needsOrder = entry && ((!previous && (entry.order < this.#highestOrder || this.#dirtyStrokes.has(id))) || (previous && previous.order !== entry.order));
+      this.#dirtyStrokes.set(id, token);
+      if (needsOrder) this.#orderChangedAt = token;
+    }
+    if (entry) this.#highestOrder = Math.max(this.#highestOrder, entry.order);
     if (previous) {
       this.#index(id, previous.stroke, false);
       this.#pointCount -= previous.stroke.points.length;
@@ -367,13 +406,14 @@ export class Notebook {
       if (marker) this.#markers.set(patch.id, marker);
       else this.#markers.delete(patch.id);
       this.#orderedMarkers = null;
+      this.#markersChangedAt = ++this.#changeToken;
     } else this.#put(patch.id, patch[direction]);
   }
 
   addMarker(value) {
     const marker = Object.freeze(validateMarker({ id: globalThis.crypto.randomUUID(), label: '', kind: 'marker', ...value }));
     if (this.#markers.has(marker.id)) throw new TypeError('A marker with that ID already exists.');
-    if (this.#markers.size >= MAX_MARKERS) throw new TypeError('The notebook contains too many markers.');
+    if (this.#markers.size >= MAX_MARKERS) throw new TypeError('The scroll contains too many markers.');
     return this.#remember([{ kind: 'marker', id: marker.id, before: undefined, after: marker }]);
   }
 
@@ -393,12 +433,12 @@ export class Notebook {
 
   add(strokes) {
     const incoming = validateStrokes(strokes);
-    if (this.#entries.size + incoming.length > MAX_STROKES) throw new TypeError('The notebook contains too many strokes.');
+    if (this.#entries.size + incoming.length > MAX_STROKES) throw new TypeError('The scroll contains too many strokes.');
     let points = this.#pointCount;
     for (const stroke of incoming) {
       if (this.#entries.has(stroke.id)) throw new TypeError('A stroke with that ID already exists.');
       points += stroke.points.length;
-      if (points > MAX_TOTAL_POINTS) throw new TypeError('The notebook contains too many pen points.');
+      if (points > MAX_TOTAL_POINTS) throw new TypeError('The scroll contains too many pen points.');
     }
     return this.#remember(incoming.map((stroke) => ({ id: stroke.id, before: undefined, after: { stroke: immutable(stroke), order: this.#nextOrder++ } })));
   }

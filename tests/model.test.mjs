@@ -182,3 +182,58 @@ test('new clipboard identities are unique and import data is detached', () => {
   assert.notEqual(a.id, b.id);
   assert.notEqual(a.id, 'source');
 });
+
+test('incremental saves retain edits made while an earlier batch is in flight', () => {
+  const scroll = new Notebook();
+  scroll.add([stroke('a', [[1, 2, .3], [5, 8, .9]])]);
+  const first = scroll.pendingChanges();
+  assert.equal(first.order, undefined);
+  assert.equal(first.upserts.length, 1);
+  scroll.move(['a'], 100, -50);
+  scroll.acknowledgeChanges(first.token);
+  const second = scroll.pendingChanges();
+  assert.equal(second.upserts[0].points[0].x, 101);
+  assert.equal(second.upserts[0].points[0].y, -48);
+  assert.equal(second.order, undefined);
+  scroll.acknowledgeChanges(second.token);
+  assert.deepEqual(scroll.pendingChanges().upserts, []);
+  scroll.remove(['a']);
+  const deletion = scroll.pendingChanges();
+  assert.deepEqual(deletion.removals, ['a']);
+  scroll.undo();
+  scroll.acknowledgeChanges(deletion.token);
+  assert.equal(scroll.pendingChanges().upserts[0].id, 'a');
+  assert.deepEqual(scroll.pendingChanges().removals, []);
+});
+
+test('incremental metadata and history do not re-send unchanged stroke geometry', () => {
+  const scroll = new Notebook({ version: 1, strokes: [stroke('original', [[4, -5]])] });
+  assert.deepEqual(scroll.pendingChanges(), { token: 0, upserts: [], removals: [] });
+  scroll.addMarker({ id: 'section', y: -30, label: 'Ideas', kind: 'section' });
+  const first = scroll.pendingChanges();
+  scroll.updateMarker('section', { label: 'New ideas' });
+  scroll.acknowledgeChanges(first.token);
+  const second = scroll.pendingChanges();
+  assert.equal(second.markers[0].label, 'New ideas');
+  assert.deepEqual(second.upserts, []);
+  assert.equal(second.order, undefined);
+  scroll.acknowledgeChanges(second.token);
+  scroll.undo();
+  assert.equal(scroll.pendingChanges().markers[0].label, 'Ideas');
+  assert.throws(() => scroll.acknowledgeChanges(999), /token/);
+});
+
+test('ordinary appends avoid resending scroll order; undoing an erase restores painter order', () => {
+  const scroll = new Notebook({ version: 1, strokes: [stroke('a', [[1, 2]]), stroke('b', [[3, 4]])] });
+  scroll.add([stroke('c', [[5, 6]]), stroke('d', [[7, 8]])]);
+  const added = scroll.pendingChanges();
+  assert.equal(added.order, undefined);
+  assert.deepEqual(added.upserts.map(stroke => stroke.id), ['c', 'd']);
+  scroll.acknowledgeChanges(added.token);
+  scroll.remove(['b']);
+  const erased = scroll.pendingChanges();
+  assert.equal(erased.order, undefined);
+  scroll.acknowledgeChanges(erased.token);
+  scroll.undo();
+  assert.deepEqual(scroll.pendingChanges().order, ['a', 'b', 'c', 'd']);
+});
