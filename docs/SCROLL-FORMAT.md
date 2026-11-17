@@ -18,7 +18,7 @@ Recovery snapshots refresh at startup, first writing, every five minutes, and cl
 
 ## Schema
 
-The SQLite application ID is `0x534d4e44` (`SMND`), and `PRAGMA user_version` is **2**. The portable document version remains **1**.
+The SQLite application ID is `0x534d4e44` (`SMND`), and `PRAGMA user_version` is **3**. The portable document version remains **1**.
 
 | Table | Columns |
 | --- | --- |
@@ -26,14 +26,14 @@ The SQLite application ID is `0x534d4e44` (`SMND`), and `PRAGMA user_version` is
 | `markers` | `id`, `y`, `label`, `kind` |
 | `metadata` | `key`, `value` |
 
-Stroke points are JSON arrays of `{x,y,p}` objects. Coordinates are signed world coordinates; `p` preserves pressure precision. `order_index` defines drawing order. `bounds` stores JSON geometry bounds.
+Stroke points are JSON arrays of `{x,y,p}` objects. Coordinates are signed world coordinates; `p` preserves pressure precision. `order_index` defines drawing order. `bounds` stores a derived JSON geometry cache; readers should recompute it from the point data and current brush geometry.
 
-`pen_type` is `pen`, `pencil`, `fountain`, or `marker`. An explicit `pen` uses the current brush. SQL `NULL` maps to an absent document `penType` field and preserves legacy ink appearance. Settings can separately store the selected `penType`.
+`pen_type` is `pen`, `pencil`, `fountain`, `marker`, or `highlighter`. An explicit `pen` uses the current brush. SQL `NULL` maps to an absent document `penType` field and preserves legacy ink appearance. Settings can separately store the selected `penType`. Highlighter transparency is a brush property; native files retain the original stroke color and point data.
 
 Marker kinds are `section`, `page-break`, and `marker`. Metadata stores `view` and `settings` as JSON, including paper, color, width, and selected pen style when present.
 
 ## Compatibility
 
-Schema 1 files remain valid read-only import sources. Managed files upgrade transactionally by adding nullable `pen_type` with default `NULL`, preserving existing point JSON and legacy styles. New exports and refreshed backups use schema 2.
+Schema 1 and 2 files remain valid read-only import sources. Managed files upgrade transactionally, adding nullable `pen_type` with default `NULL` for schema 1 while preserving existing point JSON and legacy styles. Schema 3 adds Highlighter support without changing the schema 2 columns. New exports and refreshed backups use schema 3 so older readers reject unsupported pen styles without treating the file as damaged.
 
 Unsupported future versions are rejected and preserved. Native exports use SQLite's backup API and a rollback journal to produce an independent .sm file.

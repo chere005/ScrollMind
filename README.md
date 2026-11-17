@@ -18,8 +18,9 @@ The installer is **unsigned**. If SmartScreen blocks it, choose **More info**, t
 
 ## Write and arrange
 
-- **Ink:** Pen, Pencil, Fountain, and Marker; four widths from Fine to Broad; eight color swatches and a color wheel with brightness and hex controls.
+- **Ink:** Pen, Pencil, Fountain, Marker, and Highlighter; four widths from Fine to Broad; eight color swatches and a color wheel with brightness and hex controls.
 - **Selection:** rectangular selection, moving, resizing, copy, cut, paste, duplicate, and undo/redo.
+- **Highlighting:** translucent strokes keep writing visible; separate passes build color.
 - **Shapes:** lines, arrows, rectangles, ellipses, and triangles, stored as editable strokes.
 - **Scrolls:** keep several open, switch between them, and organize each with sections, markers, and page breaks.
 - **Paper:** plain, dotted, ruled, or square grid in ivory, parchment, white, or midnight blue. Dotted paper uses a clean, regular grid.

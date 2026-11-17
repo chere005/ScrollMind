@@ -4,7 +4,7 @@ This page covers macOS signed builds and the Windows installer.
 
 ## macOS
 
-The public macOS archive is Developer ID signed with Hardened Runtime. **The 1.0.0 release is not notarized.**
+The public macOS archive is Developer ID signed with Hardened Runtime. **The current public release is not notarized.**
 
 ## Build a signed release
 

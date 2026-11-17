@@ -79,7 +79,7 @@ function readNativeScroll(file) {
     expect(database.prepare('PRAGMA quick_check').get().quick_check).toBe('ok');
     expect(database.prepare('PRAGMA application_id').get().application_id).toBe(0x534d4e44);
     const schema = database.prepare('PRAGMA user_version').get().user_version;
-    expect([1, 2]).toContain(schema);
+    expect([1, 2, 3]).toContain(schema);
     const metadata = Object.fromEntries(database.prepare('SELECT key, value FROM metadata').all().map(row => [row.key, JSON.parse(row.value)]));
     return {
       version: 1,
@@ -833,6 +833,31 @@ test('the color wheel, brightness and custom hex affect actual ink and persist o
     const channels = swatch.color.slice(1).match(/../g).map(channel => parseInt(channel, 16));
     expect(swatch.preview).toBe(`rgb(${channels.join(', ')})`);
   }
+  for (const button of await page.locator('[data-color]').all()) {
+    await button.click();
+    const centers = await button.evaluate(button => {
+      const measure = () => {
+        const bounds = button.getBoundingClientRect();
+        const center = pseudo => {
+          const style = getComputedStyle(button, pseudo), transform = new DOMMatrix(style.transform);
+          return { x: parseFloat(style.left) + transform.m41 + parseFloat(style.width) / 2,
+            y: parseFloat(style.top) + transform.m42 + parseFloat(style.height) / 2 };
+        };
+        return { disk: center('::after'), ring: center('::before'), button: { x: bounds.width / 2, y: bounds.height / 2 } };
+      };
+      const normal = measure(), oldPadding = button.style.padding;
+      button.style.padding = '7px 2px';
+      const padded = measure();
+      button.style.padding = oldPadding;
+      return [normal, padded];
+    });
+    for (const center of centers) {
+      expect(center.disk.x).toBeCloseTo(center.button.x, 2);
+      expect(center.disk.y).toBeCloseTo(center.button.y, 2);
+      expect(center.ring.x).toBeCloseTo(center.disk.x, 2);
+      expect(center.ring.y).toBeCloseTo(center.disk.y, 2);
+    }
+  }
   const addedSwatch = page.getByRole('button', { name: 'Orange ink', exact: true });
   const presetColor = await addedSwatch.getAttribute('data-color');
   await addedSwatch.click();
@@ -845,7 +870,7 @@ test('the color wheel, brightness and custom hex affect actual ink and persist o
   await page.mouse.click(wheel.x + wheel.width * 0.85, wheel.y + wheel.height / 2);
   const wheelColor = (await snapshot()).settings.color;
   expect(wheelColor).toMatch(/^#[0-9a-f]{6}$/i);
-  expect(wheelColor).not.toBe('#243746');
+  expect(wheelColor).not.toBe(presetColor);
   await page.locator('#color-value').evaluate(input => {
     input.value = '35';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -900,7 +925,7 @@ test('the color wheel, brightness and custom hex affect actual ink and persist o
 });
 
 test('pen types and extra broad width preserve style and give pressure a pronounced visible range', async ({}, testInfo) => {
-  for (const [index, penType] of ['pen', 'pencil', 'fountain', 'marker'].entries()) {
+  for (const [index, penType] of ['pen', 'pencil', 'fountain', 'marker', 'highlighter'].entries()) {
     await openPenControls();
     await page.getByLabel('Pen type', { exact: true }).selectOption(penType);
     await clickPenControl('[data-width="12"]');
@@ -933,14 +958,14 @@ test('pen types and extra broad width preserve style and give pressure a pronoun
   await testInfo.attach('pressure-thickness', { body: JSON.stringify(thickness), contentType: 'application/json' });
   await page.screenshot({ path: testInfo.outputPath('pen-types-pressure.png') });
   const expected = await snapshot();
-  expect(expected.strokes.map(stroke => stroke.penType)).toEqual(['pen', 'pencil', 'fountain', 'marker']);
-  expect(expected.settings.penType).toBe('marker');
+  expect(expected.strokes.map(stroke => stroke.penType)).toEqual(['pen', 'pencil', 'fountain', 'marker', 'highlighter']);
+  expect(expected.settings.penType).toBe('highlighter');
   expect(expected.settings.width).toBe(12);
   await closeGracefully();
   expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toEqual(expected.strokes);
   await launch();
   expect((await snapshot()).strokes).toEqual(expected.strokes);
-  expect((await snapshot()).settings.penType).toBe('marker');
+  expect((await snapshot()).settings.penType).toBe('highlighter');
   expect((await snapshot()).settings.width).toBe(12);
 });
 
@@ -1120,4 +1145,64 @@ test('macOS help dialog keeps its Mac wording', async () => {
   expect(text).toContain('⌘ Z');
   expect(text).toContain('Right click → hold + touch or drag to delete');
   expect(text).not.toContain('Windows Ink');
+});
+
+test('Highlighter is uniform within a stroke, stacks separate passes, preserves writing and exports its style', async ({}, testInfo) => {
+  await showSidebar();
+  await page.locator('#paper-tone').selectOption('white');
+  await page.locator('#paper-pattern').selectOption('plain');
+  await showSidebar(false);
+  await clickPenControl('[data-color="#171717"]');
+  await clickPenControl('[data-width="3"]');
+  await draw({ x: 320, y: 400 }, { x: 650, y: 400 });
+  const writing = (await snapshot()).strokes[0];
+
+  await openPenControls();
+  await page.getByLabel('Pen type', { exact: true }).selectOption('highlighter');
+  expect((await snapshot()).settings.color).toBe('#e2b52b');
+  expect((await snapshot()).settings.width).toBe(12);
+  await pointer('pointerdown', 300, 300, { pressure: 0.6 });
+  await pointer('pointermove', 500, 300, { pressure: 0.6 });
+  await pointer('pointermove', 400, 220, { pressure: 0.6 });
+  await pointer('pointermove', 400, 460, { pressure: 0.6 });
+  await pointer('pointerup', 400, 460, { pressure: 0, buttons: 0 });
+  const sampleColors = points => page.evaluate(async points => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const canvas = document.querySelector('#canvas'), paint = canvas.getContext('2d'), ratio = canvas.width / innerWidth;
+    return points.map(({ x, y }) => [...paint.getImageData(Math.round(x * ratio), Math.round(y * ratio), 1, 1).data].slice(0, 3));
+  }, points);
+  const [single, selfCrossing, overWriting] = await sampleColors([{ x: 350, y: 300 }, { x: 400, y: 300 }, { x: 400, y: 400 }]);
+  for (let channel = 0; channel < 3; channel++) expect(Math.abs(single[channel] - selfCrossing[channel])).toBeLessThanOrEqual(2);
+  expect(single[2]).toBeGreaterThan(100);
+  expect(single.reduce((sum, channel) => sum + channel, 0)).toBeLessThan(755);
+  expect(overWriting.reduce((sum, channel) => sum + channel, 0)).toBeLessThan(single.reduce((sum, channel) => sum + channel, 0) * 0.6);
+
+  await pointer('pointerdown', 340, 340, { pressure: 0.6 });
+  await pointer('pointermove', 480, 340, { pressure: 0.6 });
+  await pointer('pointerup', 480, 340, { pressure: 0, buttons: 0 });
+  const [doublePass, onePass] = await sampleColors([{ x: 400, y: 340 }, { x: 400, y: 365 }]);
+  expect(doublePass.reduce((sum, channel) => sum + channel, 0)).toBeLessThan(onePass.reduce((sum, channel) => sum + channel, 0) - 10);
+  expect((await snapshot()).strokes[0]).toEqual(writing);
+  expect((await snapshot()).strokes.slice(1).every(stroke => stroke.penType === 'highlighter')).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('highlighter-opacity.png') });
+
+  await openPenControls();
+  await page.getByLabel('Pen type', { exact: true }).selectOption('pen');
+  expect((await snapshot()).settings.color).toBe('#171717');
+  expect((await snapshot()).settings.width).toBe(3);
+  const expected = await snapshot();
+  await showSidebar();
+  await page.locator('#export-sm').click();
+  expect(readNativeScroll(await exportedPath('sm')).strokes).toEqual(expected.strokes);
+  await page.locator('#export-svg').click();
+  const svg = await readFile(await exportedPath('svg'), 'utf8');
+  expect(svg).toContain('data-pen-type="highlighter"');
+  await page.locator('#export-pdf').click();
+  expect((await readFile(await exportedPath('pdf'))).subarray(0, 5).toString()).toBe('%PDF-');
+  await closeGracefully();
+  await launch();
+  expect((await snapshot()).strokes).toEqual(expected.strokes);
+  expect((await snapshot()).settings.penType).toBe('pen');
+  expect((await snapshot()).settings.color).toBe('#171717');
+  expect((await snapshot()).settings.width).toBe(3);
 });

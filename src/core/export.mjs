@@ -1,5 +1,6 @@
 import { boundsOf, validateSnapshot } from './model.mjs';
-import { brushWidth, brushCap } from './brushes.mjs';
+import { brushWidth, brushCap, brushOpacity } from './brushes.mjs';
+import { strokeGeometry } from './stroke-geometry.mjs';
 
 const PADDING = 32;
 const MAX_PAGES = 500;
@@ -129,6 +130,12 @@ function markers(document, rect, bottom = rect.y + rect.height, { pdf = false, f
 function strokeSVG(stroke, settings, resourceBudget, minY = -Infinity, maxY = Infinity) {
   const points = stroke.points;
   const color = displayColor(stroke.color, settings.paperTone);
+  const geometry = strokeGeometry(stroke);
+  if (geometry) {
+    if (geometry.bounds.y + geometry.bounds.height < minY || geometry.bounds.y > maxY) return '';
+    const path = resourceBudget.add(`<path d="${geometry.path}" fill="${color}" stroke="none" opacity="${n(brushOpacity(stroke.penType))}"/>`, geometry.contours.length);
+    return `<g data-stroke-id="${xml(stroke.id)}" data-pen-type="${xml(stroke.penType)}">${path}</g>`;
+  }
   const cap = brushCap(stroke.penType);
   const pieces = [];
   if (points.length === 1) {

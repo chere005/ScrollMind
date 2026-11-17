@@ -1,4 +1,4 @@
-export const PEN_TYPES = Object.freeze(['pen', 'pencil', 'fountain', 'marker']);
+export const PEN_TYPES = Object.freeze(['pen', 'pencil', 'fountain', 'marker', 'highlighter']);
 
 function type(value) {
   if (value !== undefined && !PEN_TYPES.includes(value)) throw new TypeError('Unknown pen type.');
@@ -26,6 +26,7 @@ export function brushWidth(width, pressure, penType = undefined, angle = 0) {
     const nib = .35 + .65 * Math.abs(Math.sin(angle - Math.PI / 4));
     return Math.max(.35, width * (.18 + 1.82 * pressure ** 1.10) * nib);
   }
+  if (penType === 'highlighter') return Math.max(1, width * (1.7 + .1 * pressure));
   return Math.max(.5, width * (.85 + .35 * pressure));
 }
 
@@ -35,10 +36,16 @@ export function maxBrushWidth(width, penType = undefined) {
   if (penType === undefined) return Math.max(.35, width * 1.55);
   if (penType === 'pencil') return Math.max(.25, width * (.08 + 1.12));
   if (penType === 'marker') return Math.max(.5, width * (.85 + .35));
+  if (penType === 'highlighter') return Math.max(1, width * 1.8);
   return Math.max(.35, width * 2);
 }
 
 export function brushCap(penType = undefined) {
   type(penType);
-  return penType === 'marker' ? 'square' : 'round';
+  return penType === 'marker' || penType === 'highlighter' ? 'square' : 'round';
+}
+
+export function brushOpacity(penType = undefined) {
+  type(penType);
+  return penType === 'highlighter' ? .26 : 1;
 }

@@ -18,7 +18,7 @@ function point(value) {
 }
 
 /** Shapes are ordinary editable strokes; add the returned array as one model command. */
-export function makeShape(kind, start, end, { color = '#243746', width = 3, penType = 'pen', constrain = false } = {}) {
+export function makeShape(kind, start, end, { color = '#171717', width = 3, penType = 'pen', constrain = false } = {}) {
   if (!SHAPES.includes(kind)) throw new TypeError(`Unknown shape: ${String(kind)}.`);
   if (typeof constrain !== 'boolean') throw new TypeError('Shape constraint must be true or false.');
   const from = point(start);

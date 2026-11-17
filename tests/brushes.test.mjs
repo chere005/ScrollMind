@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PEN_TYPES, brushWidth, maxBrushWidth, brushCap } from '../src/core/brushes.mjs';
+import { PEN_TYPES, brushWidth, maxBrushWidth, brushCap, brushOpacity } from '../src/core/brushes.mjs';
 import { Notebook, makeStroke, validateSnapshot, validateStrokes, boundsOf, strokeHitsPoint, strokeIntersectsRect } from '../src/core/model.mjs';
 
 const point = (x, y, p = 1) => ({ x, y, p });
@@ -18,7 +18,7 @@ test('new pen pressure is substantially stronger while legacy ink retains its or
 });
 
 test('all brushes have bounded monotone pressure; fountain nib responds to direction', () => {
-  assert.deepEqual(PEN_TYPES, ['pen', 'pencil', 'fountain', 'marker']);
+  assert.deepEqual(PEN_TYPES, ['pen', 'pencil', 'fountain', 'marker', 'highlighter']);
   for (const penType of PEN_TYPES) {
     for (const angle of [0, Math.PI / 4, Math.PI / 2, Math.PI * 3 / 4]) {
       let previous = 0;
@@ -36,6 +36,11 @@ test('all brushes have bounded monotone pressure; fountain nib responds to direc
   assert.ok(brushWidth(10, 1, 'marker') / brushWidth(10, 0, 'marker') < 1.5);
   assert.equal(brushCap('marker'), 'square');
   assert.equal(brushCap('fountain'), 'round');
+  assert.equal(brushCap('highlighter'), 'square');
+  assert.equal(brushOpacity('highlighter'), .26);
+  assert.equal(brushOpacity('marker'), 1);
+  assert.equal(brushOpacity(), 1);
+  assert.ok(brushWidth(12, .5, 'highlighter') > brushWidth(12, .5, 'marker'));
 });
 
 test('new strokes explicitly record pen type while old stroke and settings absence survives validation', () => {
