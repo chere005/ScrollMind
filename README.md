@@ -1,6 +1,6 @@
 # ScrollMind
 
-Full-screen handwriting for Wacom pen displays, with an infinite vertical page. Write with a pressure-sensitive pen, then arrange your strokes with a mouse and keyboard. ScrollMind saves your writing locally.
+Full-screen handwriting for Wacom pen displays, with an infinite vertical page. Write with a pressure-sensitive pen, then arrange your strokes with a mouse and keyboard. ScrollMind runs on macOS and Windows and saves your writing locally.
 
 ## Download and install
 
@@ -9,6 +9,12 @@ The current download requires **macOS 13 or later on Apple silicon (M1 or newer)
 Download the arm64 ZIP from the [latest release](https://github.com/chere005/ScrollMind/releases/latest), unzip it, and move **ScrollMind.app** to **Applications**.
 
 The app is Developer ID signed and **not notarized**. If macOS blocks the first launch, see [Apple's instructions for opening downloaded apps](https://support.apple.com/en-us/102445).
+
+### Windows
+
+The Windows version requires **Windows 10 or later (x64)**. Run **ScrollMind-Setup-<version>.exe**, the Windows installer published with a release or built locally with `npm run build:win`. It installs for the current user and needs no administrator rights. Opening an .sm file in Explorer opens it in ScrollMind.
+
+The installer is **unsigned**. If SmartScreen blocks it, choose **More info**, then **Run anyway**.
 
 ## Write and arrange
 
@@ -24,14 +30,14 @@ ScrollMind opens on a connected Wacom display when available. Its screen selecto
 
 ## Save and share
 
-Scrolls save automatically in `~/Documents/ScrollMind`, with recovery snapshots. Open scrolls and the active view return after restarting. No account or cloud service is required.
+Scrolls save automatically in `~/Documents/ScrollMind` (`Documents\ScrollMind` on Windows), with recovery snapshots. Open scrolls and the active view return after restarting. On Windows, shutting down, restarting, or logging off waits for the final save. No account or cloud service is required.
 
 Export an editable **.sm** file, vector **SVG**, or paginated **PDF**. Opening an .sm file creates a working copy in a new scroll and preserves the original file.
 
-See the [controls guide](docs/CONTROLS.md) for pen buttons, keyboard shortcuts, and scroll management, or the [native format reference](docs/SCROLL-FORMAT.md) for storage and recovery details.
+See the [controls guide](docs/CONTROLS.md) for pen buttons, keyboard shortcuts (Ctrl on Windows), and scroll management, or the [native format reference](docs/SCROLL-FORMAT.md) for storage and recovery details.
 
 ## Development
 
 Use a Node.js version with `node:sqlite` support. Install dependencies with `npm ci`, run locally with `npm start`, and check changes with `npm run preflight`. UI tests run in hidden windows with temporary data.
 
-The drawing model is separate from the desktop shell. See [macOS distribution](docs/SIGNING.md) for signed builds and release archives.
+The drawing model is separate from the desktop shell. `npm run build:win` creates the unsigned Windows installer in `dist/`, `npm run build:win:dir` an unpacked app, and `npm run release:win` a verified installer with its SHA-256 checksum. See [distribution](docs/SIGNING.md) for signed macOS builds and the Windows installer.

@@ -4,7 +4,7 @@ An **.sm** file is a SQLite database containing editable ink, paper settings, th
 
 ## Files on disk
 
-ScrollMind keeps its data in `~/Documents/ScrollMind`:
+ScrollMind keeps its data in `~/Documents/ScrollMind` (`Documents\ScrollMind` on Windows):
 
 | Path | Contents |
 | --- | --- |
@@ -14,7 +14,7 @@ ScrollMind keeps its data in `~/Documents/ScrollMind`:
 | `workspace.json` | Scroll names, open/closed state, and active scroll |
 | `Deleted Scrolls/<archive-id>/` | Recoverable deleted scroll and deletion record |
 
-Recovery snapshots refresh at startup, first writing, every five minutes, and clean close. Corrupt files are preserved during recovery. Opening an external .sm creates a managed working copy and leaves the source unchanged. Earlier JSON saves migrate automatically, preserving their originals.
+Recovery snapshots refresh at startup, first writing, every five minutes, and clean close. Corrupt files are preserved during recovery. Saves are flushed to disk (fsync through writable handles on Windows) and files are replaced by renames, which NTFS journals. Opening an external .sm creates a managed working copy and leaves the source unchanged. Earlier JSON saves migrate automatically, preserving their originals.
 
 ## Schema
 

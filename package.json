@@ -12,7 +12,10 @@
     "preflight": "npm test && npm run test:ui",
     "icon": "node tools/make-icon.mjs",
     "build:mac": "electron-builder --mac --dir",
-    "release:mac": "npm run preflight && node tools/release-mac.mjs"
+    "release:mac": "npm run preflight && node tools/release-mac.mjs",
+    "release:win": "node tools/release-win.mjs --check && npm run preflight && node tools/release-win.mjs",
+    "build:win": "electron-builder --win",
+    "build:win:dir": "electron-builder --win --dir"
   },
   "devDependencies": {
     "@playwright/test": "1.65.1",
@@ -45,7 +48,28 @@
         "mimeType": "application/x-scrollmind"
       }
     ],
-    "forceCodeSigning": true
+    "forceCodeSigning": true,
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "ScrollMind-Setup-${version}.${ext}",
+      "signExecutable": false,
+      "forceCodeSigning": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "ScrollMind"
+    }
   },
   "author": "Sean Cheren"
 }

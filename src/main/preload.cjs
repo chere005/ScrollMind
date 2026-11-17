@@ -10,6 +10,8 @@ function subscribe(channel, callback) {
 }
 
 contextBridge.exposeInMainWorld('scrollmind', Object.freeze({
+  platform: process.platform,
+  testPenPlatform: process.env.SCROLLMIND_TEST === '1' ? process.env.SCROLLMIND_TEST_PEN_PLATFORM : undefined,
   load: () => ipcRenderer.invoke('notebook:load'),
   save: (document) => ipcRenderer.invoke('notebook:save', document),
   saveChanges: (changes) => ipcRenderer.invoke('scroll:save-changes', changes),

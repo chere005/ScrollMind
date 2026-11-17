@@ -28,12 +28,40 @@ function basicValidate(document) {
   return document;
 }
 
+const WINDOWS = process.platform === 'win32';
+const TRANSIENT_FS = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+// Windows: FlushFileBuffers needs write access, so files are synced through an 'r+' handle.
+async function syncFile(file) {
+  const handle = await fs.open(file, WINDOWS ? 'r+' : 'r');
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+// Windows cannot open a directory for fsync; NTFS journals metadata, so a completed rename is durable.
+// Elsewhere (macOS/Linux) the directory is really fsynced.
 async function syncDirectory(directory) {
+  if (WINDOWS) return;
   let handle;
   try { handle = await fs.open(directory, 'r'); await handle.sync(); }
   catch (error) {
     if (!['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM', 'EACCES'].includes(error.code)) throw error;
   } finally { await handle?.close(); }
+}
+
+// Windows: antivirus/indexers briefly lock files, making rename fail with EPERM/EBUSY/EACCES. Bounded retry.
+async function renameWithRetry(from, to) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await fs.rename(from, to); }
+    catch (error) {
+      if (!WINDOWS || !TRANSIENT_FS.has(error.code) || attempt >= 10) throw error;
+      // Windows reports rename-onto-a-directory as EPERM; surface the POSIX EISDIR instead of retrying.
+      const target = await fs.stat(to).catch(() => null);
+      if (target?.isDirectory() && !(await fs.stat(from).catch(() => null))?.isDirectory()) {
+        throw Object.assign(new Error(`EISDIR: illegal operation on a directory, rename '${from}' -> '${to}'`), { code: 'EISDIR', syscall: 'rename', path: from, dest: to });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
 }
 
 async function exists(file) {
@@ -175,7 +203,7 @@ function createStore(directory, { validate } = {}) {
     for (const protectedFile of [filePath, backupPath, `${filePath}-wal`, `${filePath}-shm`]) {
       if (resolved.toLowerCase() === path.resolve(protectedFile).toLowerCase()) throw new Error('Choose a different file so the active scroll and its backup stay safe.');
       try {
-        const [target, protectedStat] = await Promise.all([fs.stat(resolved), fs.stat(protectedFile)]);
+        const [target, protectedStat] = await Promise.all([fs.stat(resolved, { bigint: true }), fs.stat(protectedFile, { bigint: true })]);
         if (target.dev === protectedStat.dev && target.ino === protectedStat.ino) throw new Error('Choose a different file so the active scroll and its backup stay safe.');
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
@@ -190,9 +218,8 @@ function createStore(directory, { validate } = {}) {
       await sqliteBackup(db, temporary, { rate: 256 });
       const copy = new DatabaseSync(temporary, { allowExtension: false });
       try { copy.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;'); } finally { copy.close(); }
-      const handle = await fs.open(temporary, 'r');
-      try { await handle.sync(); } finally { await handle.close(); }
-      await fs.rename(temporary, destination);
+      await syncFile(temporary);
+      await renameWithRetry(temporary, destination);
       await syncDirectory(parent);
     } finally {
       for (const file of [temporary, `${temporary}-wal`, `${temporary}-shm`]) await fs.unlink(file).catch(() => {});
@@ -306,7 +333,7 @@ function createStore(directory, { validate } = {}) {
   async function preserveCorrupt(suffix = `.corrupt-${Date.now()}-${crypto.randomUUID()}`) {
     for (const extension of ['', '-wal', '-shm']) {
       const file = `${filePath}${extension}`;
-      if (await exists(file)) await fs.rename(file, `${filePath}${suffix}${extension}`);
+      if (await exists(file)) await renameWithRetry(file, `${filePath}${suffix}${extension}`);
     }
   }
 

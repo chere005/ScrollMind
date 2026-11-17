@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PenButtonShortcuts } from '../src/core/pen-shortcuts.mjs';
+import { PenButtonShortcuts, penButtonFromHoverMouse } from '../src/core/pen-shortcuts.mjs';
 
 const event = (type, buttons, extra = {}) => ({ type, buttons, pointerType: 'pen', pointerId: 44, clientX: 100, clientY: 100, pressure: 0.5, ...extra });
 function click(shortcuts, button, start, { duration = 40, pointerId = 44, type = 'pointerdown', releaseType = 'pointerup', x = 100, y = 100 } = {}) {
@@ -151,4 +151,50 @@ test('the exact click-duration and double-click-window boundaries remain usable'
   const shortcuts = new PenButtonShortcuts();
   assert.equal(click(shortcuts, 4, 0, { duration: 250 }), null);
   assert.equal(click(shortcuts, 4, 400, { duration: 250 }), 'redo');
+});
+
+test('pressureContact: barrel taps with pressure never count as an undo double-click, hover clicks still do', () => {
+  const shortcuts = new PenButtonShortcuts({ pressureContact: true });
+  const tap = start => {
+    assert.equal(shortcuts.update(event('pointerdown', 2, { pressure: 0.5 }), start), null);
+    return shortcuts.update(event('pointerup', 0, { pressure: 0 }), start + 40);
+  };
+  assert.equal(tap(0), null);
+  assert.equal(tap(100), null);
+  const hover = (button, start) => {
+    shortcuts.update(event('pointerdown', button, { pressure: 0 }), start);
+    return shortcuts.update(event('pointerup', 0, { pressure: 0 }), start + 40);
+  };
+  assert.equal(hover(2, 2000), null);
+  assert.equal(hover(2, 2100), 'undo');
+  assert.equal(hover(4, 3000), null);
+  assert.equal(hover(4, 3100), 'redo');
+});
+
+test('default constructor still treats pressured button 2 as a hover press', () => {
+  const shortcuts = new PenButtonShortcuts();
+  const tap = start => { shortcuts.update(event('pointerdown', 2, { pressure: 0.5 }), start); return shortcuts.update(event('pointerup', 0, { pressure: 0 }), start + 40); };
+  assert.equal(tap(0), null);
+  assert.equal(tap(100), 'undo');
+});
+
+test('hover mouse clicks map to pen buttons only while the pen is in range', () => {
+  const mouse = (type, button) => ({ type, pointerType: 'mouse', button, clientX: 5, clientY: 6 });
+  assert.equal(penButtonFromHoverMouse(mouse('pointerdown', 2), false), null);
+  assert.equal(penButtonFromHoverMouse(mouse('pointermove', 2), true), null);
+  assert.equal(penButtonFromHoverMouse(mouse('pointerdown', 0), true), null);
+  assert.equal(penButtonFromHoverMouse({ ...mouse('pointerdown', 2), pointerType: 'pen' }, true), null);
+  assert.equal(penButtonFromHoverMouse(mouse('pointerdown', 2), true).buttons, 2);
+  assert.equal(penButtonFromHoverMouse(mouse('pointerdown', 1), true).buttons, 4);
+  assert.equal(penButtonFromHoverMouse(mouse('pointerup', 1), true).buttons, 0);
+  const shortcuts = new PenButtonShortcuts();
+  const press = (button, start) => {
+    shortcuts.update(penButtonFromHoverMouse(mouse('pointerdown', button), true), start);
+    return shortcuts.update(penButtonFromHoverMouse(mouse('pointerup', button), true), start + 40);
+  };
+  assert.equal(press(2, 0), null);
+  assert.equal(press(2, 200), 'undo');
+  assert.equal(press(1, 1000), null);
+  assert.equal(press(1, 1200), 'redo');
+  assert.equal(press(2, 3000), null, 'a single click does nothing');
 });

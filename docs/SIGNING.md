@@ -1,4 +1,8 @@
-# macOS distribution
+# Distribution
+
+This page covers macOS signed builds and the Windows installer.
+
+## macOS
 
 The public macOS archive is Developer ID signed with Hardened Runtime. **The 1.0.0 release is not notarized.**
 
@@ -38,3 +42,17 @@ Use an existing Keychain profile through `APPLE_KEYCHAIN_PROFILE`, optionally se
 A successful notarized build creates `dist/ScrollMind-<version>-<arch>.zip`. Submission records and rejection logs remain under `dist`; they are local release records, not public release notes. Saved archive hashes prevent resuming against a different build.
 
 References: [Apple notarization](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow), [Hardened Runtime](https://developer.apple.com/documentation/security/hardened-runtime), [electron-builder macOS configuration](https://www.electron.build/v26/docs/api/app-builder-lib.interface.macconfiguration/).
+
+## Windows
+
+The Windows installer is an unsigned, per-user NSIS package (`dist/ScrollMind-Setup-<version>.exe`) that needs no administrator rights. No Windows code-signing certificate is used, so SmartScreen may warn on first run. It registers the `.sm` file type. `build.win.forceCodeSigning` is `false`; the top-level `forceCodeSigning: true` still applies to macOS.
+
+`npm run release:win` runs the preflight checks, builds the installer, checks that the packaged app reports the package name and version, and writes the installer's SHA-256 file and a local release report marked unsigned in `dist/`. It starts no GitHub release or Actions run.
+
+| Command | Purpose |
+| --- | --- |
+| `node tools/release-win.mjs --check` | Validate the Windows build configuration without building |
+| `npm run build:win` | Build the installer without the release checks |
+| `npm run build:win:dir` | Build only the unpacked app in `dist/win-unpacked` |
+
+Publishing the .exe with its checksum alongside the macOS ZIP is a manual `gh` step, done only on explicit request. Never describe the installer as signed.

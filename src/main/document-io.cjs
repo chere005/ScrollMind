@@ -39,9 +39,15 @@ function createDocumentIO({ getStore, getWindow, dataDirectory, testing }) {
     try {
       handle = await fs.open(temp, 'wx', 0o600);
       await handle.writeFile(content);
-      await handle.sync();
+      await handle.sync(); // handle is opened writable ('wx'), so this works on Windows too
       await handle.close(); handle = null;
-      await fs.rename(temp, file);
+      for (let attempt = 0; ; attempt++) { // Windows: transient EPERM/EBUSY/EACCES from antivirus/indexers.
+        try { await fs.rename(temp, file); break; }
+        catch (error) {
+          if (process.platform !== 'win32' || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt >= 10) throw error;
+          await new Promise(resolve => setTimeout(resolve, 20 * (attempt + 1)));
+        }
+      }
     } finally {
       await handle?.close().catch(() => {});
       await fs.rm(temp, { force: true }).catch(() => {});

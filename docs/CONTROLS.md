@@ -12,6 +12,8 @@ The shape dropdown offers Line, Arrow, Rectangle, Ellipse, and Triangle. Choose 
 
 ## Mouse and keyboard
 
+Shortcuts are shown for macOS. On Windows, use Ctrl for ⌘ and Shift for ⇧; the app shows the Windows names. Windows has no menu bar, so every action is in the sidebar or on a shortcut below.
+
 | Action | Control |
 | --- | --- |
 | Pen / Eraser / Rectangle selection / Hand | B / E / V / H |
@@ -24,12 +26,12 @@ The shape dropdown offers Line, Arrow, Rectangle, Ellipse, and Triangle. Choose 
 | Copy / Cut / Paste | ⌘C / ⌘X / ⌘V |
 | Duplicate / Select all | ⌘D / ⌘A |
 | Delete selection | Delete or Backspace |
-| Undo / Redo | ⌘Z / ⌘⇧Z |
+| Undo / Redo | ⌘Z / ⌘⇧Z (Windows also Ctrl+Y) |
 | Sidebar / Pen controls | ⌘/ / Tab |
 | Return to start | ⌘0 |
-| Full screen | ⌘⇧F or F11 |
+| Full screen | ⌘⇧F or F11 (Windows: Ctrl+Shift+F or F11) |
 | Clear selection or dismiss controls | Escape |
-| Close current scroll / Quit | ⌘W / ⌘Q |
+| Close current scroll / Quit | ⌘W / ⌘Q (Windows: Ctrl+W / Ctrl+Q or Alt+F4) |
 
 A selection rectangle selects complete strokes that it crosses. Each drawing, erase drag, shape, or selection move is one undo action. Escape leaves full screen once selections and open controls are dismissed.
 
@@ -44,7 +46,18 @@ ScrollMind responds to the standard mouse-button actions assigned in the Wacom d
 
 A single button click does nothing. Pressing the erase button during an existing stroke does not erase until you lift and touch down again. Each erase drag ends when the tip lifts and undoes together. Erasing and scrolling do not count as double-click commands. The toolbar eraser and a pen's rear eraser also erase continuously on contact.
 
-Useful ExpressKey assignments are ⌘Z, ⌘⇧Z, B, E, V, H, and Tab. A ring or strip assigned to vertical scrolling moves along the page. ScrollMind does not change the driver's assignments.
+Useful ExpressKey assignments are ⌘Z, ⌘⇧Z, B, E, V, H, and Tab (Ctrl+Z and Ctrl+Y on Windows). A ring or strip assigned to vertical scrolling moves along the page. ScrollMind does not change the driver's assignments.
+
+### Windows
+
+In **Wacom Tablet Properties**, keep **Use Windows Ink** turned on so the pen reports pressure and its side buttons. Press-and-hold right-click and flick gestures are disabled on the writing canvas, so holding the tip still never opens a menu or scrolls.
+
+The driver's **Side Switch Mode** decides which pen-button features work:
+
+- **Click & Tap** (recommended): with the lower switch on **Right Click**, hold it and touch or drag the tip across strokes to erase. The driver sends no clicks while hovering, so hover double-click undo/redo is unavailable. Assign ExpressKeys (or the upper switch as a keystroke) to **Ctrl+Z** and **Ctrl+Y** instead.
+- **Hover Click**: with the lower switch on **Right Click** and the upper switch on **Middle Click**, double-clicking while hovering undoes (lower) or redoes (upper). Use **E** or the pen's rear eraser to erase.
+
+In either mode, **Middle Click** on the upper switch scrolls when held and dragged.
 
 ## Paper and navigation
 
@@ -52,13 +65,13 @@ Open the sidebar for plain, dotted, ruled, or square-grid paper in ivory, parchm
 
 **Section**, **Marker**, and **Page break** add navigation points at the middle of the view. Edit their names directly and press Enter to finish. Their symbols jump to the saved place; × removes them. Undo restores removed points. Page breaks also control PDF pagination.
 
-The screen selector chooses the writing display. Mirrored macOS displays show the same app; independent screen placement requires an extended desktop.
+The screen selector chooses the writing display. Mirrored displays show the same app; independent screen placement requires an extended desktop.
 
 ## Manage and export scrolls
 
 **New Scroll** adds another scroll. Select a name to switch, use its pencil button to rename, or × to close. Closed scrolls remain in **Other scrolls**. Each open scroll keeps its own undo history during the session, and the workspace returns after restart.
 
-The trash button deletes a scroll from the workspace and keeps a recoverable copy in `~/Documents/ScrollMind/Deleted Scrolls`. **Clear Scroll** removes all writing, sections, markers, and page breaks from the current scroll in one undoable action, keeping paper settings and other scrolls.
+The trash button deletes a scroll from the workspace and keeps a recoverable copy in `~/Documents/ScrollMind/Deleted Scrolls` (`Documents\ScrollMind\Deleted Scrolls` on Windows). **Clear Scroll** removes all writing, sections, markers, and page breaks from the current scroll in one undoable action, keeping paper settings and other scrolls. Without a menu bar, Windows uses the sidebar buttons for these actions.
 
 **Open Scroll**, or opening an .sm file with ScrollMind, adds an editable working copy and preserves its source. **Export Scroll** offers:
 

@@ -5,10 +5,14 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const { createWorkspace } = require('./workspace.cjs');
 const { createDocumentIO } = require('./document-io.cjs');
+const { findScrollArgument, commandForInput } = require('./launch-args.cjs');
 
 app.setName('ScrollMind');
+if (process.platform === 'win32') app.setAppUserModelId('com.seancheren.scrollmind');
 const testing = process.env.SCROLLMIND_TEST === '1' || process.argv.includes('--smoke-test');
 if (testing && process.platform === 'darwin') app.setActivationPolicy('accessory');
+// Hidden Electron windows on Windows render ~1 frame/s, which starves synthetic mouse input in UI tests.
+if (testing && process.platform === 'win32') app.commandLine.appendSwitch('disable-frame-rate-limit');
 const dataDirectory = process.env.SCROLLMIND_DATA_DIR || path.join(app.getPath('documents'), 'ScrollMind');
 app.setPath('userData', path.join(dataDirectory, 'App'));
 app.setAppLogsPath(path.join(dataDirectory, 'Logs'));
@@ -17,6 +21,7 @@ let window;
 let store;
 let documents;
 const pendingOpenPaths = [];
+if (process.platform === 'win32') { const file = findScrollArgument(process.argv); if (file) pendingOpenPaths.push(file); }
 let closing = false;
 let allowClose = false;
 let testClipboard = '';
@@ -53,6 +58,8 @@ function preferredDisplay() {
 }
 
 function createMenu() {
+  // Windows has a frameless window with no menu bar; shortcuts are handled by before-input-event instead.
+  if (process.platform === 'win32') return Menu.setApplicationMenu(null);
   const action = (label, command, options = {}) => ({ label, click: () => send(command), ...options });
   const template = [
     ...(process.platform === 'darwin' ? [{ label: 'ScrollMind', submenu: [
@@ -162,6 +169,8 @@ function installHandlers() {
   });
 }
 
+const windowIcon = (() => { const file = path.join(__dirname, '../../build/icon.png'); return require('node:fs').existsSync(file) ? file : undefined; })();
+
 async function createWindow() {
   const { validateSnapshot } = await import('../core/model.mjs');
   store = createWorkspace(dataDirectory, { validate: validateSnapshot });
@@ -170,6 +179,7 @@ async function createWindow() {
   window = new BrowserWindow({
     ...(testing ? { width: 1280, height: 800 } : display.bounds),
     title: 'ScrollMind',
+    ...(process.platform === 'win32' && windowIcon ? { icon: windowIcon } : {}),
     show: false,
     focusable: !testing,
     frame: false,
@@ -185,6 +195,25 @@ async function createWindow() {
       backgroundThrottling: false,
     },
   });
+  if (process.platform === 'win32') {
+    window.webContents.on('before-input-event', (event, input) => {
+      const command = commandForInput(input);
+      if (!command) return;
+      event.preventDefault();
+      if (command === 'quit') requestClose(); else send(command);
+    });
+    // Windows does not emit before-quit on shutdown, restart or log-off. Hold the session end until the final save and store.close() finish.
+    window.on('query-session-end', (event) => {
+      if (allowClose) return;
+      event.preventDefault();
+      requestClose();
+    });
+    // Last chance if the user chooses to shut down anyway; only synchronous work counts.
+    window.on('session-end', () => {
+      if (allowClose) return;
+      try { Promise.resolve(store?.flush()).catch(() => {}); store?.close(); } catch {}
+    });
+  }
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.webContents.on('will-attach-webview', (event) => event.preventDefault());
@@ -232,8 +261,8 @@ app.on('open-file', (event, file) => {
 });
 if (!ownsInstance) app.quit();
 else {
-  app.on('second-instance', (_event, argv) => {
-    const file = argv.find(value => value.toLowerCase().endsWith('.sm'));
+  app.on('second-instance', (_event, argv, workingDirectory) => {
+    const file = process.platform === 'win32' ? findScrollArgument(argv, workingDirectory) : argv.find(value => value.toLowerCase().endsWith('.sm'));
     if (file) { pendingOpenPaths.push(file); if (rendererReady) send('open-sm'); }
     if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
   });

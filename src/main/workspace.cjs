@@ -61,6 +61,42 @@ async function exists(file) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
+const WINDOWS = process.platform === 'win32';
+const TRANSIENT_FS = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+// Windows: FlushFileBuffers needs write access, so files are synced through an 'r+' handle.
+async function syncFile(file) {
+  const handle = await fs.open(file, WINDOWS ? 'r+' : 'r');
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+// Windows cannot open a directory for fsync; NTFS journals metadata, so a completed rename is durable.
+// Elsewhere (macOS/Linux) the directory is really fsynced.
+async function syncDirectory(directory) {
+  if (WINDOWS) return;
+  let handle;
+  try { handle = await fs.open(directory, 'r'); await handle.sync(); }
+  catch (error) {
+    if (!['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM', 'EACCES'].includes(error.code)) throw error;
+  } finally { await handle?.close(); }
+}
+
+// Windows: antivirus/indexers briefly lock files, making rename fail with EPERM/EBUSY/EACCES. Bounded retry.
+async function renameWithRetry(from, to) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await fs.rename(from, to); }
+    catch (error) {
+      if (!WINDOWS || !TRANSIENT_FS.has(error.code) || attempt >= 10) throw error;
+      // Windows reports rename-onto-a-directory as EPERM; surface the POSIX EISDIR instead of retrying.
+      const target = await fs.stat(to).catch(() => null);
+      if (target?.isDirectory() && !(await fs.stat(from).catch(() => null))?.isDirectory()) {
+        throw Object.assign(new Error(`EISDIR: illegal operation on a directory, rename '${from}' -> '${to}'`), { code: 'EISDIR', syscall: 'rename', path: from, dest: to });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
+}
+
 async function atomicWrite(file, content) {
   const temporary = path.join(path.dirname(file), `.${path.basename(file)}-${crypto.randomUUID()}.tmp`);
   let handle;
@@ -69,13 +105,11 @@ async function atomicWrite(file, content) {
     await handle.writeFile(content, 'utf8');
     await handle.sync();
     await handle.close(); handle = null;
-    await fs.rename(temporary, file);
+    await renameWithRetry(temporary, file);
     // Rename is the commit point. Report committed state even if directory sync
     // is unavailable, so renderer state always matches the on-disk active ID.
-    let parent;
-    try { parent = await fs.open(path.dirname(file), 'r'); await parent.sync(); }
-    catch (error) { if (!['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM', 'EACCES'].includes(error.code)) console.warn(`ScrollMind workspace directory sync will be retried: ${error.message}`); }
-    finally { await parent?.close().catch(() => {}); }
+    try { await syncDirectory(path.dirname(file)); }
+    catch (error) { console.warn(`ScrollMind workspace directory sync will be retried: ${error.message}`); }
   } finally {
     await handle?.close().catch(() => {});
     await fs.unlink(temporary).catch(() => {});
@@ -242,7 +276,7 @@ function createWorkspace(directory, options = {}) {
     for (const name of names) if (await exists(path.join(archive, `${prefix}${name}`))) { prefix = `original-${crypto.randomUUID()}-`; break; }
     for (const name of names) {
       const source = path.join(storeDirectory(record.id), name);
-      if (await exists(source)) await fs.rename(source, path.join(archive, `${prefix}${name}`));
+      if (await exists(source)) await renameWithRetry(source, path.join(archive, `${prefix}${name}`));
     }
   }
 
@@ -292,7 +326,7 @@ function createWorkspace(directory, options = {}) {
           if (error.code === 'UNSUPPORTED_WORKSPACE') throw error;
           try {
             const restored = await readManifest(manifestBackupPath);
-            if (error.code !== 'ENOENT') await fs.rename(manifestPath, `${manifestPath}.corrupt-${Date.now()}-${crypto.randomUUID()}`);
+            if (error.code !== 'ENOENT') await renameWithRetry(manifestPath, `${manifestPath}.corrupt-${Date.now()}-${crypto.randomUUID()}`);
             await atomicWrite(manifestPath, `${JSON.stringify(restored, null, 2)}\n`);
             manifest = restored; recovered = true;
           } catch (backupError) {
@@ -434,16 +468,13 @@ function createWorkspace(directory, options = {}) {
         if (!(await exists(source))) continue;
         const copy = path.join(pending, name);
         await fs.copyFile(source, copy, fs.constants.COPYFILE_EXCL);
-        const handle = await fs.open(copy, 'r');
-        try { await handle.sync(); } finally { await handle.close(); }
+        await syncFile(copy);
       }
       const record = validateDeletion({ version: 1, id, name: target.name, archiveId, deletedAt: new Date().toISOString(), replacement: normalized.scrolls.find((scroll) => scroll.id === normalized.activeId) }, archiveId);
       await atomicWrite(path.join(pending, 'deletion.json'), `${JSON.stringify(record, null, 2)}\n`);
-      await fs.rename(pending, archive); // Logical commit: the deletion is now recoverable and durable.
-      let archiveParent;
-      try { archiveParent = await fs.open(deletedDirectory, 'r'); await archiveParent.sync(); }
+      await renameWithRetry(pending, archive); // Logical commit: the deletion is now recoverable and durable.
+      try { await syncDirectory(deletedDirectory); }
       catch (error) { console.warn(`ScrollMind deletion archive directory sync will be retried: ${error.message}`); }
-      finally { await archiveParent?.close().catch(() => {}); }
       manifest = normalized;
       stores.delete(id);
       try { await persist(normalized); }
@@ -474,7 +505,7 @@ function createWorkspace(directory, options = {}) {
     for (const protectedFile of protectedFiles) {
       if (resolved.toLowerCase() === (await resolvedDestination(protectedFile)).toLowerCase()) throw new Error('Choose a different export file so your workspace scrolls stay safe.');
       try {
-        const [target, protectedStat] = await Promise.all([fs.stat(resolved), fs.stat(protectedFile)]);
+        const [target, protectedStat] = await Promise.all([fs.stat(resolved, { bigint: true }), fs.stat(protectedFile, { bigint: true })]);
         if (target.dev === protectedStat.dev && target.ino === protectedStat.ino) throw new Error('Choose a different export file so your workspace scrolls stay safe.');
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }

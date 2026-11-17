@@ -257,9 +257,19 @@ test('manifest backup recovery discovers the latest valid scroll while ignoring 
   const badFolder = path.join(directory, 'Scrolls', badId);
   await fs.mkdir(badFolder);
   await fs.writeFile(path.join(badFolder, 'scroll.sm'), 'malformed orphan');
-  await fs.symlink(path.join(directory, 'Scrolls', lostId), path.join(directory, 'Scrolls', linkedId), 'dir');
+  // Windows without admin/Developer Mode cannot create symlinks (EPERM): use a directory junction
+  // (still reported as a symbolic link) and skip only the file-symlink fixture, which has no equivalent.
+  const link = async (target, linkPath, type) => {
+    try { await fs.symlink(target, linkPath, type); return true; }
+    catch (error) {
+      if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
+      if (type !== 'dir') return false;
+      await fs.symlink(target, linkPath, 'junction'); return true;
+    }
+  };
+  await link(path.join(directory, 'Scrolls', lostId), path.join(directory, 'Scrolls', linkedId), 'dir');
   await fs.mkdir(path.join(directory, 'Scrolls', linkedFileId));
-  await fs.symlink(path.join(directory, 'Scrolls', lostId, 'scroll.sm'), path.join(directory, 'Scrolls', linkedFileId, 'scroll.sm'));
+  await link(path.join(directory, 'Scrolls', lostId, 'scroll.sm'), path.join(directory, 'Scrolls', linkedFileId, 'scroll.sm'), 'file');
   await fs.writeFile(path.join(directory, 'workspace.json'), '{lost newest manifest');
   const restored = fresh();
   const loaded = await restored.load();

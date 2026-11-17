@@ -1,14 +1,31 @@
 import { Notebook as Scroll, boundsOf, makeStroke, strokeHitsPoint, strokeIntersectsRect, validateStrokes } from '../core/model.mjs';
-import { PenButtonShortcuts } from '../core/pen-shortcuts.mjs';
+import { PenButtonShortcuts, penButtonFromHoverMouse } from '../core/pen-shortcuts.mjs';
 import { makeShape } from '../core/shapes.mjs';
 import { brushWidth, brushCap } from '../core/brushes.mjs';
 import { createPenControls } from './pen-controls.mjs';
+import { localizeShortcut } from '../core/shortcut-labels.mjs';
 
 const $ = selector => document.querySelector(selector);
 const bridge = window.scrollmind;
 const canvas = $('#canvas'), overlay = $('#overlay');
 const ctx = canvas.getContext('2d', { alpha: false }), ink = overlay.getContext('2d');
 const status = $('#status');
+const platform = bridge.platform || 'darwin';
+const windows = platform === 'win32';
+if (windows) document.documentElement.classList.add('win32');
+const windowsPen = (bridge.testPenPlatform || platform) === 'win32';
+if (platform !== 'darwin') {
+  for (const element of document.querySelectorAll('[title]')) element.title = localizeShortcut(element.title, platform);
+  for (const element of document.querySelectorAll('kbd')) element.textContent = localizeShortcut(element.textContent, platform);
+  if (windows) {
+    const full = $('#help-fullscreen'); if (full) full.textContent = 'Ctrl+Shift+F or F11';
+    // The Wacom help describes macOS driver wording; on Windows it describes Windows Ink and the driver's side-switch assignments.
+    $('#help-wacom-intro').textContent = 'The tip writes with pressure. In the Wacom driver, turn on Windows Ink, then set the pen side switches:';
+    $('#help-wacom-buttons').innerHTML = '<dt>Side Switch Mode: Click & Tap</dt><dd>Lower switch on Right Click → hold and touch or drag to delete · no hover clicks, so put Undo/Redo (Ctrl+Z · Ctrl+Y) on ExpressKeys</dd><dt>Side Switch Mode: Hover Click</dt><dd>Right Click (lower) / Middle Click (upper) → hover double-click undoes / redoes · erase with E or the rear eraser</dd><dt>Upper side switch</dt><dd>Middle Click → hold and drag to scroll</dd><dt>ExpressKeys, if available</dt><dd>Ctrl+Z · Ctrl+Y · V · Tab</dd>';
+    $('#help-space').insertAdjacentHTML('beforeend', '<dt>Close scroll / Quit</dt><dd><kbd>Ctrl+W</kbd> / <kbd>Alt+F4</kbd></dd>');
+  }
+}
+let lastPenAt = 0, penHoverAt = -Infinity;
 let scroll = new Scroll();
 let settings = { color: '#243746', width: 3, paper: 'plain', paperTone: 'ivory' };
 let offsetY = 0, tool = 'pen', selection = new Set(), active = null;
@@ -20,7 +37,7 @@ let fileOperation = null;
 let clipboardQueue = Promise.resolve();
 let nativeFileQueue = Promise.resolve();
 const penButtons = new Map();
-const penShortcuts = new PenButtonShortcuts();
+const penShortcuts = new PenButtonShortcuts({ pressureContact: windowsPen });
 let workspace = { activeId: null, scrolls: [] };
 let shapeKind = 'rectangle';
 const scrollSessions = new Map();
@@ -199,13 +216,28 @@ function contact(event) { return event.pointerType !== 'pen' || event.pressure >
 function penInput(event) {
   if (event.pointerType !== 'pen') return null;
   const known = penButtons.has(event.pointerId);
-  const previous = penButtons.get(event.pointerId) ?? 0;
+  const before = penButtons.get(event.pointerId) ?? { buttons: 0, contact: false };
+  const previous = before.buttons, wasContact = before.contact;
   const buttons = event.buttons;
-  penButtons.set(event.pointerId, buttons);
+  // Windows Ink reports barrel plus tip as button 2 with pressure; only a barrel pointerdown starts that contact.
+  const contactNow = windowsPen
+    ? Boolean(buttons & 1) || (Boolean(buttons & 2) && !(buttons & 32) && event.pressure > 0 && (event.type === 'pointerdown' ? event.button === 2 : wasContact))
+    : Boolean(buttons & 1);
+  penButtons.set(event.pointerId, { buttons, contact: contactNow });
+  if (windowsPen) return { tipDown: contactNow, tipStarted: contactNow && !wasContact && (known || event.type === 'pointerdown') };
   return { tipDown: Boolean(buttons & 1), tipStarted: Boolean((buttons & 1) && !(previous & 1) && (known || event.type === 'pointerdown')) };
 }
 function barrelDelete(event) {
   return event.pointerType === 'pen' && Boolean(event.buttons & 2) && !(event.buttons & 32) && event.button !== 5;
+}
+function penInRange() { return windowsPen && performance.now() - penHoverAt < 500; }
+// A hovering Windows barrel click arrives as mouse input; returns true when it was handled as a pen-button click.
+function hoverMouseShortcut(event) {
+  const mapped = penButtonFromHoverMouse(event, penInRange());
+  if (!mapped) return false;
+  event.preventDefault();
+  if (loaded && !loadError && !fileOperation) penShortcut(mapped);
+  return true;
 }
 function penShortcut(event) {
   const action = penShortcuts.update(event);
@@ -230,6 +262,7 @@ function eraseAt(point) {
   if (hits.length && scroll.remove(hits.map(stroke => stroke.id))) { active.changed = true; requestRender(); }
 }
 function pointerDown(event, pen = penInput(event)) {
+  if (event.pointerType === 'pen') lastPenAt = performance.now();
   if (!loaded || loadError || fileOperation || event.pointerType === 'touch') return;
   if (event.type === 'pointerdown' && penShortcut(event)) return;
   if (active) return;
@@ -304,8 +337,13 @@ function finishGesture(cancel = false) {
   try { if (overlay.hasPointerCapture(gesture.pointerId)) overlay.releasePointerCapture(gesture.pointerId); } catch {}
   if (modified) changed(); updateControls(); requestRender();
 }
-overlay.addEventListener('pointerdown', pointerDown); overlay.addEventListener('pointermove', pointerMove);
-overlay.addEventListener('pointerup', event => { penInput(event); if (loaded && !loadError && !fileOperation && penShortcut(event)) return; if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); else if (active.kind === 'shape') { active.current = world(event); active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: event.shiftKey }); } finishGesture(); } });
+overlay.addEventListener('pointerdown', event => { if (hoverMouseShortcut(event) && event.button === 2) return; if (windows && event.pointerType === 'pen') event.preventDefault(); pointerDown(event); });
+for (const type of ['pointerover', 'pointerenter', 'pointermove']) overlay.addEventListener(type, event => { if (windowsPen && event.pointerType === 'pen') { penHoverAt = performance.now(); if (type === 'pointermove' && !event.buttons) lastPenAt = penHoverAt; } });
+for (const type of ['pointerout', 'pointerleave']) overlay.addEventListener(type, event => { if (event.pointerType === 'pen') penHoverAt = -Infinity; });
+if (windows) overlay.addEventListener('pointermove', event => { if (event.pointerType === 'pen' && event.buttons) lastPenAt = performance.now(); });
+overlay.addEventListener('pointermove', pointerMove);
+if (windows) overlay.addEventListener('pointerup', event => { if (event.pointerType === 'pen') lastPenAt = performance.now(); });
+overlay.addEventListener('pointerup', event => { if (hoverMouseShortcut(event) && event.button === 2) return; penInput(event); if (loaded && !loadError && !fileOperation && penShortcut(event)) return; if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); else if (active.kind === 'shape') { active.current = world(event); active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: event.shiftKey }); } finishGesture(); } });
 overlay.addEventListener('pointercancel', event => { penButtons.delete(event.pointerId); penShortcuts.reset(); finishGesture(true); });
 overlay.addEventListener('lostpointercapture', () => finishGesture(true));
 overlay.addEventListener('pointerleave', event => { if (!active && event.buttons === 0) penButtons.delete(event.pointerId); });
@@ -437,7 +475,7 @@ $('#shape-select').addEventListener('change', event => { if (!event.target.value
 $('#controls-link').addEventListener('click', () => safely('help')); $('#help-close').addEventListener('click', () => $('#help').close());
 $('#context-menu').addEventListener('click', event => { const button = event.target.closest('[data-command]'); if (button) { safely(button.dataset.command); $('#context-menu').hidden = true; } });
 overlay.addEventListener('contextmenu', event => {
-  event.preventDefault(); if (!loaded || event.pointerType === 'pen') return; finishGesture(); const menu = $('#context-menu'); menu.hidden = false;
+  event.preventDefault(); if (!loaded || event.pointerType === 'pen' || ((windows || windowsPen) && (penInRange() || performance.now() - lastPenAt < 1000))) return; finishGesture(); const menu = $('#context-menu'); menu.hidden = false;
   menu.style.left = `${Math.min(width - 206, event.clientX)}px`; menu.style.top = `${Math.min(height - 213, event.clientY)}px`;
   for (const button of menu.querySelectorAll('button')) button.disabled = button.dataset.command !== 'paste' && selection.size === 0;
 });

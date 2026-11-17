@@ -2,13 +2,15 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 let app;
 let page;
 let dataDir;
+let penPlatform = 'darwin';
+let extraArgs = [];
 
 async function launch() {
   const env = {
@@ -17,9 +19,10 @@ async function launch() {
     SCROLLMIND_DATA_DIR: dataDir,
     SCROLLMIND_EXPORT_DIR: resolve(dataDir, 'Exports'),
     SCROLLMIND_OPEN_PATH: '__cancel__',
+    SCROLLMIND_TEST_PEN_PLATFORM: penPlatform,
   };
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await electron.launch({ args: [root, '--smoke-test'], cwd: root, env });
+  app = await electron.launch({ args: [root, '--smoke-test', ...extraArgs], cwd: root, env });
   page = await app.firstWindow();
   await page.waitForFunction(() => Boolean(window.scrollmindDebug));
 }
@@ -126,6 +129,8 @@ async function pointer(type, x, y, { pressure = 0.6, buttons = 1, button = 0 } =
 }
 
 test.beforeEach(async () => {
+  penPlatform = 'darwin';
+  extraArgs = [];
   dataDir = await mkdtemp(resolve(tmpdir(), 'scrollmind-ui-'));
   await launch();
 });
@@ -135,7 +140,7 @@ test.afterEach(async ({}, testInfo) => {
     await testInfo.attach('hidden-app', { body: await page.screenshot(), contentType: 'image/png' }).catch(() => {});
   }
   await closeGracefully().catch(async () => { if (app) await app.close().catch(() => {}); });
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 test('rectangle crossing selects a whole stroke; mouse moves, clipboard edits and undo preserve ink', async () => {
@@ -937,4 +942,182 @@ test('pen types and extra broad width preserve style and give pressure a pronoun
   expect((await snapshot()).strokes).toEqual(expected.strokes);
   expect((await snapshot()).settings.penType).toBe('marker');
   expect((await snapshot()).settings.width).toBe(12);
+});
+
+async function relaunchWithPenPlatform(value) {
+  await closeGracefully();
+  penPlatform = value;
+  await launch();
+}
+
+test('Windows Ink: barrel plus tip (button 2 with pressure) erases, one undo group, no fake contact', async () => {
+  await relaunchWithPenPlatform('win32');
+  await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
+  await draw({ x: 200, y: 400 }, { x: 400, y: 400 });
+  await draw({ x: 200, y: 550 }, { x: 400, y: 550 });
+  const original = (await snapshot()).strokes;
+  const [first, second, third] = original;
+
+  await pointer('pointerdown', 300, 250, { pressure: 0.5, buttons: 2, button: 2 });
+  await expect.poll(async () => (await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+  await pointer('pointermove', 300, 400, { pressure: 0.6, buttons: 2, button: -1 });
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([third.id]);
+  await pointer('pointerup', 300, 400, { pressure: 0, buttons: 0, button: 2 });
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toEqual(original);
+
+  // Pressure appearing after a zero-pressure barrel pointerdown is hover, not contact.
+  await pointer('pointerdown', 300, 550, { pressure: 0, buttons: 2, button: 2 });
+  await pointer('pointermove', 300, 550, { pressure: 0.5, buttons: 2, button: -1 });
+  await pointer('pointerup', 300, 550, { pressure: 0, buttons: 0, button: 2 });
+  expect((await snapshot()).strokes).toEqual(original);
+
+  // Lifting the tip ends the gesture; later pressured moves do not restart it.
+  await pointer('pointerdown', 300, 250, { pressure: 0.5, buttons: 2, button: 2 });
+  await pointer('pointermove', 300, 250, { pressure: 0, buttons: 2, button: -1 });
+  await pointer('pointermove', 300, 550, { pressure: 0.6, buttons: 2, button: -1 });
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+  await pointer('pointerup', 300, 550, { pressure: 0, buttons: 0, button: 2 });
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toEqual(original);
+
+  // Two quick barrel taps are deletions, not an Undo double-click.
+  await draw({ x: 600, y: 250 }, { x: 700, y: 250 });
+  const withExtra = (await snapshot()).strokes;
+  for (let index = 0; index < 2; index++) {
+    await pointer('pointerdown', 300, 700, { pressure: 0.5, buttons: 2, button: 2 });
+    await pointer('pointerup', 300, 700, { pressure: 0, buttons: 0, button: 2 });
+  }
+  expect((await snapshot()).strokes).toEqual(withExtra);
+
+  // Barrel pressed mid-stroke does not delete until fresh contact.
+  await pointer('pointerdown', 300, 250, { pressure: 0.4, buttons: 1, button: 0 });
+  await pointer('pointermove', 300, 260, { pressure: 0.6, buttons: 3, button: 2 });
+  await pointer('pointermove', 300, 400, { pressure: 0.6, buttons: 2, button: -1 });
+  await pointer('pointerup', 300, 400, { pressure: 0, buttons: 0, button: 2 });
+  expect((await snapshot()).strokes.filter(stroke => [first.id, second.id, third.id].includes(stroke.id))).toEqual(original);
+  await expect(page.locator('#context-menu')).toBeHidden();
+});
+
+test('Windows: hover barrel clicks arriving as mouse input double-click to undo; single click opens no menu', async () => {
+  await relaunchWithPenPlatform('win32');
+  await draw();
+  expect((await snapshot()).strokes).toHaveLength(1);
+  const hoverClicks = count => page.evaluate(async count => {
+    const overlay = document.querySelector('#overlay');
+    const fire = (type, init) => overlay.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: 600, clientY: 400, ...init }));
+    fire('pointermove', { pointerId: 44, pointerType: 'pen', buttons: 0, pressure: 0 });
+    for (let index = 0; index < count; index++) {
+      fire('pointerdown', { pointerId: 1, pointerType: 'mouse', button: 2, buttons: 2 });
+      fire('pointerup', { pointerId: 1, pointerType: 'mouse', button: 2, buttons: 0 });
+      overlay.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 600, clientY: 400 }));
+      await new Promise(resolve => setTimeout(resolve, 80));
+    }
+  }, count);
+  await hoverClicks(1);
+  expect((await snapshot()).strokes).toHaveLength(1);
+  await expect(page.locator('#context-menu')).toBeHidden();
+  await page.waitForTimeout(500);
+  await hoverClicks(2);
+  await expect.poll(async () => (await snapshot()).strokes.length).toBe(0);
+  await expect(page.locator('#context-menu')).toBeHidden();
+});
+
+test('Windows shutdown, restart or log-off holds the session until the final save completes', async () => {
+  test.skip(process.platform !== 'win32', 'query-session-end is a Windows-only event');
+  await draw({ x: 220, y: 250 }, { x: 430, y: 300 });
+  const expected = (await snapshot()).strokes;
+  expect(expected).toHaveLength(1);
+  const exited = new Promise(resolveExit => app.process().once('exit', resolveExit));
+  const prevented = await app.evaluate(({ BrowserWindow }) => {
+    const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+    BrowserWindow.getAllWindows()[0].emit('query-session-end', event, ['logoff']);
+    return event.defaultPrevented;
+  });
+  expect(prevented).toBe(true);
+  await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error('App did not save and quit')), 10_000))]);
+  expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toEqual(expected);
+  expect((await readdir(dataDir)).some(name => /backup/i.test(name))).toBe(true);
+});
+
+test.describe('Windows .sm launch arguments', () => {
+  test.skip(process.platform !== 'win32', 'argv .sm opening is wired only on Windows');
+  let sourceDir;
+  test.afterEach(async () => { if (sourceDir) await rm(sourceDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); sourceDir = null; });
+
+  // Writes a two-stroke scroll, exports it to a temp .sm outside the data dir, then returns its path and strokes.
+  async function makeSource() {
+    await draw({ x: 220, y: 250 }, { x: 430, y: 300 });
+    await draw({ x: 220, y: 400 }, { x: 430, y: 450 });
+    const strokes = (await snapshot()).strokes;
+    expect(strokes).toHaveLength(2);
+    await showSidebar();
+    await page.locator('#export-sm').click();
+    sourceDir = await mkdtemp(resolve(tmpdir(), 'scrollmind-src-'));
+    const file = resolve(sourceDir, 'Opened From Explorer.SM');
+    await copyFile(await exportedPath('sm'), file);
+    return { file, strokes, bytes: await readFile(file) };
+  }
+
+  test('cold start with a .sm path in argv opens it as a new working-copy scroll and leaves the source untouched', async () => {
+    const source = await makeSource();
+    await closeGracefully();
+    // A fresh data directory starts with one empty scroll, so two strokes can only come from the argv file.
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    dataDir = await mkdtemp(resolve(tmpdir(), 'scrollmind-ui-'));
+    extraArgs = [source.file];
+    await launch();
+    await expect.poll(async () => (await snapshot()).strokes.length).toBe(2);
+    const state = await workspace();
+    expect(state.scrolls.filter(scroll => scroll.open)).toHaveLength(2);
+    expect(state.scrolls.find(scroll => scroll.active).name).not.toBe('Scroll 1');
+    expect((await snapshot()).strokes).toEqual(source.strokes);
+    await draw({ x: 600, y: 300 }, { x: 700, y: 340 });
+    expect((await snapshot()).strokes).toHaveLength(3);
+    await closeGracefully();
+    expect(await readFile(source.file)).toEqual(source.bytes);
+  });
+
+  // A true second Electron instance cannot be launched here (tests skip the single-instance lock), so the
+  // same handler is driven by emitting the app 'second-instance' event with an argv and working directory.
+  test('second-instance with a .sm argv opens it as a new scroll, resolves relative paths and ignores argv without one', async () => {
+    const source = await makeSource();
+    const originalId = (await workspace()).activeId;
+    await showSidebar(false);
+    await app.evaluate(({ app }) => { app.emit('second-instance', {}, ['ScrollMind.exe', '--flag'], process.cwd()); });
+    await page.waitForTimeout(500);
+    expect((await workspace()).activeId).toBe(originalId);
+
+    await app.evaluate(({ app }, [file, directory]) => { app.emit('second-instance', {}, ['ScrollMind.exe', file], directory); }, [basename(source.file), sourceDir]);
+    await expect.poll(async () => (await workspace()).activeId).not.toBe(originalId);
+    expect((await snapshot()).strokes).toEqual(source.strokes);
+    expect((await workspace()).scrolls.filter(scroll => scroll.open)).toHaveLength(2);
+    expect(await readFile(source.file)).toEqual(source.bytes);
+  });
+
+  test('help dialog shows Windows wording and no Mac symbols', async () => {
+    await page.keyboard.press('F1');
+    const help = page.locator('#help');
+    await expect(help).toBeVisible();
+    const text = await help.innerText();
+    expect(text).not.toMatch(/[⌘⇧⌥]/);
+    expect(text).toContain('Windows Ink');
+    expect(text).toContain('Click & Tap');
+    expect(text).toContain('Right Click');
+    expect(text).toContain('Hover Click');
+    expect(text).toContain('Ctrl+Y');
+    expect(text).toContain('Ctrl+Shift+F or F11');
+    expect(text).toContain('Alt+F4');
+    expect(text).toContain('Ctrl+Z');
+    expect(await page.locator('#version').innerText()).toMatch(/^ScrollMind \d+\.\d+\.\d+$/);
+  });
+});
+
+test('macOS help dialog keeps its Mac wording', async () => {
+  test.skip(process.platform !== 'darwin', 'macOS only');
+  await page.keyboard.press('F1');
+  const text = await page.locator('#help').innerText();
+  expect(text).toContain('⌘ Z');
+  expect(text).toContain('Right click → hold + touch or drag to delete');
+  expect(text).not.toContain('Windows Ink');
 });

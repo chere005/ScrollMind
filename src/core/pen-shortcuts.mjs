@@ -9,6 +9,10 @@ const MAX_MOVEMENT = 8;
 export class PenButtonShortcuts {
   #pointers = new Map();
   #candidate = null;
+  #pressureContact;
+
+  // pressureContact: treat any pressure above zero as tip contact (Windows Ink reports barrel plus tip as button 2 with pressure).
+  constructor({ pressureContact = false } = {}) { this.#pressureContact = Boolean(pressureContact); }
 
   reset() {
     this.#pointers.clear();
@@ -53,11 +57,12 @@ export class PenButtonShortcuts {
     state.lastTime = now;
 
     // Tip contact, rear-eraser contact, and button chords invalidate the entire pair.
-    if ((buttons & CONTACT_BUTTONS) || (buttons !== 0 && !cleanButton)) this.#candidate = null;
+    const pressed = this.#pressureContact && event.pressure > 0;
+    if (pressed || (buttons & CONTACT_BUTTONS) || (buttons !== 0 && !cleanButton)) this.#candidate = null;
     let action = null;
     if (state.press) {
       const press = state.press;
-      if ((buttons & ~press.button) || Math.hypot(x - press.x, y - press.y) > MAX_MOVEMENT
+      if (pressed || (buttons & ~press.button) || Math.hypot(x - press.x, y - press.y) > MAX_MOVEMENT
         || now - press.time > MAX_CLICK_DURATION) {
         press.valid = false;
         this.#candidate = null;
@@ -75,8 +80,16 @@ export class PenButtonShortcuts {
     }
     if (cleanButton && !(previous & cleanButton) && !state.press) {
       if (this.#candidate && (this.#candidate.pointerId !== pointerId || this.#candidate.button !== cleanButton)) this.#candidate = null;
-      state.press = { button: cleanButton, time: now, x, y, valid: true };
+      state.press = { button: cleanButton, time: now, x, y, valid: !pressed };
     }
     return action;
   }
+}
+
+/** Windows drivers send a hovering barrel click as mouse input; map it to the pen button it stands for. */
+export function penButtonFromHoverMouse(event, penInRange) {
+  if (!penInRange || event?.pointerType !== 'mouse' || !['pointerdown', 'pointerup'].includes(event.type)) return null;
+  const mapped = event.button === 2 ? 2 : event.button === 1 ? 4 : 0;
+  if (!mapped) return null;
+  return { type: event.type, pointerType: 'pen', pointerId: -2, buttons: event.type === 'pointerdown' ? mapped : 0, clientX: event.clientX, clientY: event.clientY, pressure: 0 };
 }
