@@ -46,6 +46,8 @@ ScrollMind prefers a display with Wacom or Cintiq in its name. Other screens can
 
 The sidebar lists your open scrolls. **New Scroll** creates another; select a scroll to switch, rename it with its pencil button, or close it with ×. Closed scrolls remain saved and can be reopened from **Other scrolls**. Each open scroll keeps its own undo history during the session. The app restores the workspace and active scroll after restarting.
 
+The trash button deletes a scroll from the workspace and **Other scrolls**, keeping a recoverable copy in `Documents/ScrollMind/Deleted Scrolls`; other scrolls and any original imported `.sm` file remain unchanged.
+
 **Clear Scroll** removes every stroke, section, marker, and page break from the current scroll in one action. Undo restores all of them together. Paper settings and other open scrolls stay as they were.
 
 The original scroll is `~/Documents/ScrollMind/scroll.sm`; additional scrolls live in `Scrolls/<id>/scroll.sm` under that folder. Each has a recovery snapshot named `scroll.backup.sm`, refreshed at startup, first writing, every five minutes, and clean close. These are self-contained SQLite files. The app saves changes automatically and waits for the final save before quitting. A recovery error appears if neither saved file can be read; damaged files are preserved. Earlier JSON saves migrate automatically, preserving the original JSON files.

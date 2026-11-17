@@ -97,11 +97,11 @@ function drawPaper() {
   const tone = tones[settings.paperTone] || tones.ivory;
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.fillStyle = tone.background; ctx.fillRect(0, 0, width, height);
   if (settings.paperTone === 'parchment') { ctx.save(); ctx.translate(0, -offsetY % 128); ctx.fillStyle = paperTexture(); ctx.fillRect(0, -128, width, height + 256); ctx.restore(); }
-  ctx.strokeStyle = tone.line; ctx.fillStyle = tone.line; ctx.lineWidth = .65; ctx.globalAlpha = .42;
+  ctx.strokeStyle = tone.line; ctx.fillStyle = tone.line; ctx.lineWidth = .65; ctx.globalAlpha = .5;
   const gap = settings.paper === 'ruled' ? 32 : 24, first = Math.floor(offsetY / gap) * gap - offsetY;
   if (settings.paper === 'dots') {
-    ctx.globalAlpha = .7; ctx.beginPath();
-    for (let y = first; y < height; y += gap) for (let x = 16; x < width; x += gap) { ctx.moveTo(x + .7, y); ctx.arc(x, y, .7, 0, Math.PI * 2); }
+    ctx.globalAlpha = .8; ctx.beginPath();
+    for (let y = first; y < height; y += gap) for (let x = 16; x < width; x += gap) { ctx.moveTo(x + .8, y); ctx.arc(x, y, .8, 0, Math.PI * 2); }
     ctx.fill();
   } else if (settings.paper === 'ruled' || settings.paper === 'grid') {
     ctx.beginPath(); for (let y = first; y < height; y += gap) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
@@ -319,7 +319,7 @@ function duplicateSelection() {
 }
 async function command(value, detail) {
   if (!loaded || loadError || fileOperation) return;
-  if (['open-sm', 'new-scroll', 'select-scroll', 'close-scroll', 'rename-scroll', 'clear-scroll'].includes(value) || value.startsWith('export-')) return scrollFileCommand(value, detail);
+  if (['open-sm', 'new-scroll', 'select-scroll', 'close-scroll', 'delete-scroll', 'rename-scroll', 'clear-scroll'].includes(value) || value.startsWith('export-')) return scrollFileCommand(value, detail);
   if (value.startsWith('tool-')) return setTool(value.slice(5));
   if (value === 'undo' || value === 'redo') { finishGesture(); if (scroll[value]()) { changed(); renderMarkers(); } }
   else if (['copy', 'cut', 'paste'].includes(value)) {
@@ -386,6 +386,12 @@ async function scrollFileCommand(value, detail) {
     } else if (value === 'close-scroll') {
       activateScroll(await bridge.closeScroll(detail || workspace.activeId));
       message('Scroll closed · saved locally');
+    } else if (value === 'delete-scroll') {
+      const id = detail || workspace.activeId;
+      const result = await bridge.deleteScroll(id);
+      scrollSessions.delete(id);
+      activateScroll(result);
+      message('Scroll deleted · copy kept in Deleted Scrolls');
     } else if (value === 'rename-scroll') {
       const result = await bridge.renameScroll(detail.id, detail.name);
       workspace = result.workspace; renderScrolls();
@@ -489,7 +495,10 @@ function renderScrolls() {
     name.addEventListener('keydown', event => { if (event.key === 'Enter') name.blur(); else if (event.key === 'Escape') { name.value = item.name; name.blur(); } });
     const close = document.createElement('button'); close.className = 'scroll-close'; close.textContent = '×'; close.title = `Close ${item.name}`; close.setAttribute('aria-label', `Close ${item.name}`);
     close.addEventListener('click', () => safely('close-scroll', item.id));
-    row.append(go, name, rename, close); list.append(row);
+    const remove = document.createElement('button'); remove.className = 'scroll-delete'; remove.title = `Delete ${item.name}`; remove.setAttribute('aria-label', `Delete ${item.name}`);
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/></svg>';
+    remove.addEventListener('click', () => safely('delete-scroll', item.id));
+    row.append(go, name, rename, close, remove); list.append(row);
   }
   $('#closed-scrolls').hidden = !closedList.childElementCount;
 }

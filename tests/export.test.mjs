@@ -33,6 +33,7 @@ test('paper colors, continuous world-space ruling, and safe marker text are pres
   assert.match(svg, /fill="#172c40"/);
   assert.match(svg, /stroke="#e5eaf1"/);
   assert.match(svg, /patternUnits="userSpaceOnUse" x="4" y="-12" width="24" height="24"/);
+  assert.match(svg, /stroke-width="0\.65" opacity="0\.5"/);
   assert.match(svg, /&lt;script&gt;&quot;&amp;�/);
   assert.doesNotMatch(svg, /<script>|\u0000/);
   assert.match(svg, /<title>A &amp; B<\/title>/);
@@ -40,6 +41,7 @@ test('paper colors, continuous world-space ruling, and safe marker text are pres
   assert.match(parchment, /fill="#eee0bf"/);
   assert.match(parchment, /scroll-texture/);
   assert.match(parchment, /scroll-ruling/);
+  assert.match(parchment, /r="0\.8" fill="[^"]+" opacity="0\.8"/);
   const outerBreak = exportSVG(snapshot([stroke('near', [[0, 0]])], [{ id: 'outer', y: 1000, kind: 'page-break', label: 'Later page' }]));
   assert.match(outerBreak, /data-marker-id="outer"/);
 });

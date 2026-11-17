@@ -72,6 +72,7 @@ function createMenu() {
       { label: 'Open Writing Folder', click: async () => { await fs.mkdir(dataDirectory, { recursive: true }); await shell.openPath(dataDirectory); } },
       { type: 'separator' },
       action('Close Scroll', 'close-scroll', { accelerator: 'CmdOrCtrl+W' }),
+      action('Delete Scroll', 'delete-scroll'),
       ...(process.platform !== 'darwin' ? [{ label: 'Quit', accelerator: 'Alt+F4', click: requestClose }] : []),
     ] },
     { label: 'Edit', submenu: [
@@ -113,6 +114,7 @@ function installHandlers() {
   handle('workspace:new', (options) => store.newScroll(options));
   handle('workspace:select', (id) => store.selectScroll(id));
   handle('workspace:close', (id) => store.closeScroll(id));
+  handle('workspace:delete', (id) => store.deleteScroll(id));
   handle('workspace:rename', (id, name) => store.renameScroll(id, name));
   handle('scroll:export', (format, options) => documents.exportDocument(format, options));
   handle('scroll:open', () => {

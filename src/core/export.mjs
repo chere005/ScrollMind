@@ -88,11 +88,11 @@ function definitions(settings, prefix, clipping) {
   const tone = TONES[settings.paperTone];
   let content = '';
   if (settings.paper === 'dots') {
-    content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="4" y="-12" width="24" height="24"><circle cx="12" cy="12" r="0.7" fill="${tone.line}" opacity="0.7"/></pattern>`;
+    content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="4" y="-12" width="24" height="24"><circle cx="12" cy="12" r="0.8" fill="${tone.line}" opacity="0.8"/></pattern>`;
   } else if (settings.paper === 'ruled') {
-    content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="0" y="-16" width="1" height="32"><path d="M0 16H1" fill="none" stroke="${tone.line}" stroke-width="0.65" opacity="0.42"/></pattern>`;
+    content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="0" y="-16" width="1" height="32"><path d="M0 16H1" fill="none" stroke="${tone.line}" stroke-width="0.65" opacity="0.5"/></pattern>`;
   } else if (settings.paper === 'grid') {
-    content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="4" y="-12" width="24" height="24"><path d="M0 12H24M12 0V24" fill="none" stroke="${tone.line}" stroke-width="0.65" opacity="0.42"/></pattern>`;
+    content += `<pattern id="${prefix}-ruling" patternUnits="userSpaceOnUse" x="4" y="-12" width="24" height="24"><path d="M0 12H24M12 0V24" fill="none" stroke="${tone.line}" stroke-width="0.65" opacity="0.5"/></pattern>`;
   }
   if (settings.paperTone === 'parchment') content += `<pattern id="${prefix}-texture" patternUnits="userSpaceOnUse" width="128" height="128">${parchmentPaths()}</pattern>`;
   if (clipping) content += `<clipPath id="${prefix}-clip"><rect x="${n(clipping.x)}" y="${n(clipping.y)}" width="${n(clipping.width)}" height="${n(clipping.height)}"/></clipPath>`;

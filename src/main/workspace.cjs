@@ -37,14 +37,22 @@ function validateManifest(value) {
     ids.add(id);
     if (typeof scroll.open !== 'boolean') throw new Error('The scroll workspace has an invalid open state.');
     const descriptor = { id, name: validName(scroll.name), open: scroll.open };
-    if (scroll.sourcePath !== undefined) {
+    if (scroll.deleted !== undefined && typeof scroll.deleted !== 'boolean') throw new Error('The scroll workspace has an invalid deletion state.');
+    if (scroll.deleted) {
+      if (scroll.open) throw new Error('A deleted scroll cannot be open.');
+      descriptor.deleted = true;
+      if (scroll.archiveId !== undefined) {
+        if (!UUID.test(scroll.archiveId)) throw new Error('The scroll workspace has an invalid deletion archive.');
+        descriptor.archiveId = scroll.archiveId;
+      }
+    } else if (scroll.sourcePath !== undefined) {
       if (typeof scroll.sourcePath !== 'string' || scroll.sourcePath.length > 4096 || !path.isAbsolute(scroll.sourcePath) || scroll.sourcePath.includes('\0')) throw new Error('The scroll workspace has an invalid source file.');
       descriptor.sourcePath = path.normalize(scroll.sourcePath);
     }
     return descriptor;
   });
   validId(value.activeId);
-  if (!ids.has('main') || !scrolls.some((scroll) => scroll.id === value.activeId && scroll.open)) throw new Error('The scroll workspace has no active scroll.');
+  if (!ids.has('main') || !scrolls.some((scroll) => scroll.id === value.activeId && scroll.open && !scroll.deleted)) throw new Error('The scroll workspace has no active scroll.');
   return { version: VERSION, activeId: value.activeId, scrolls };
 }
 
@@ -94,6 +102,7 @@ function createWorkspace(directory, options = {}) {
   const manifestPath = path.join(directory, 'workspace.json');
   const manifestBackupPath = path.join(directory, 'workspace.backup.json');
   const scrollsDirectory = path.join(directory, 'Scrolls');
+  const deletedDirectory = path.join(directory, 'Deleted Scrolls');
   const stores = new Map();
   let manifest;
   let loaded = false;
@@ -117,12 +126,14 @@ function createWorkspace(directory, options = {}) {
     validId(id);
     const found = manifest?.scrolls.find((scroll) => scroll.id === id);
     if (!found) throw new Error('That scroll is not in this workspace.');
+    if (found.deleted) throw new Error('That scroll has been deleted.');
     return found;
   }
 
   function storeDirectory(id) { return id === 'main' ? directory : path.join(scrollsDirectory, validId(id)); }
 
   async function ensureStore(id) {
+    if (manifest?.scrolls.some((scroll) => scroll.id === id && scroll.deleted)) throw new Error('That scroll has been deleted.');
     let entry = stores.get(id);
     if (!entry) {
       entry = { store: createStore(storeDirectory(id), options), loaded: false };
@@ -141,7 +152,7 @@ function createWorkspace(directory, options = {}) {
 
   function workspaceState() {
     if (!manifest) return { activeId: null, scrolls: [] };
-    return { activeId: manifest.activeId, scrolls: manifest.scrolls.map((scroll) => ({ id: scroll.id, name: scroll.name, open: scroll.open, active: scroll.id === manifest.activeId })) };
+    return { activeId: manifest.activeId, scrolls: manifest.scrolls.filter((scroll) => !scroll.deleted).map((scroll) => ({ id: scroll.id, name: scroll.name, open: scroll.open, active: scroll.id === manifest.activeId })) };
   }
 
   async function persist(next) {
@@ -195,6 +206,80 @@ function createWorkspace(directory, options = {}) {
     return true;
   }
 
+  function validateDeletion(value, archiveId) {
+    if (!value || value.version !== 1 || value.archiveId !== archiveId || !UUID.test(archiveId)) throw new Error('A deleted scroll recovery record is unreadable.');
+    validId(value.id);
+    const name = validName(value.name);
+    if (typeof value.deletedAt !== 'string' || !Number.isFinite(Date.parse(value.deletedAt))) throw new Error('A deleted scroll recovery record has an invalid date.');
+    const replacement = value.replacement;
+    if (!replacement || typeof replacement !== 'object') throw new Error('A deleted scroll recovery record has no replacement scroll.');
+    const scrolls = replacement.id === 'main' ? [replacement] : [{ id: 'main', name: 'Scroll 1', open: false }, replacement];
+    const normalized = validateManifest({ version: VERSION, activeId: replacement.id, scrolls });
+    return { version: 1, id: value.id, name, deletedAt: value.deletedAt, archiveId, replacement: normalized.scrolls.find((scroll) => scroll.id === replacement.id) };
+  }
+
+  async function deletionRecords() {
+    let folders;
+    try {
+      if (!(await fs.lstat(deletedDirectory)).isDirectory()) throw new Error('Deleted scroll recovery records cannot be read safely.');
+      folders = await fs.readdir(deletedDirectory, { withFileTypes: true });
+    } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+    const records = [];
+    for (const folder of folders) {
+      if (!UUID.test(folder.name)) continue; // Pending archives have not committed a deletion.
+      if (!folder.isDirectory()) throw new Error('A deleted scroll recovery folder cannot be read safely.');
+      const file = path.join(deletedDirectory, folder.name, 'deletion.json');
+      if (!(await fs.lstat(file)).isFile() || (await fs.stat(file)).size > 1024 * 1024) throw new Error('A deleted scroll recovery record is unreadable.');
+      records.push(validateDeletion(JSON.parse(await fs.readFile(file, 'utf8')), folder.name));
+    }
+    return records.sort((a, b) => a.deletedAt.localeCompare(b.deletedAt) || a.archiveId.localeCompare(b.archiveId));
+  }
+
+  async function moveDeletedOriginals(record) {
+    const archive = path.join(deletedDirectory, record.archiveId);
+    const names = ['scroll.sm', 'scroll.backup.sm', 'scroll.sm-wal', 'scroll.sm-shm'];
+    let prefix = 'original-';
+    for (const name of names) if (await exists(path.join(archive, `${prefix}${name}`))) { prefix = `original-${crypto.randomUUID()}-`; break; }
+    for (const name of names) {
+      const source = path.join(storeDirectory(record.id), name);
+      if (await exists(source)) await fs.rename(source, path.join(archive, `${prefix}${name}`));
+    }
+  }
+
+  async function reconcileDeletions() {
+    const records = await deletionRecords();
+    if (!records.length) return false;
+    const next = structuredClone(manifest);
+    const deleted = new Set(records.map((record) => record.id));
+    for (const record of records) {
+      let target = next.scrolls.find((scroll) => scroll.id === record.id);
+      if (!target) { target = { id: record.id, name: record.name, open: false }; next.scrolls.push(target); }
+      target.deleted = true; target.open = false; target.archiveId = record.archiveId;
+      delete target.sourcePath;
+      if (!deleted.has(record.replacement.id) && !next.scrolls.some((scroll) => scroll.id === record.replacement.id)) next.scrolls.push(record.replacement);
+    }
+    if (!next.scrolls.some((scroll) => scroll.id === next.activeId && !scroll.deleted && scroll.open)) {
+      const replacement = [...records].reverse().map((record) => next.scrolls.find((scroll) => scroll.id === record.replacement.id && !scroll.deleted)).find(Boolean)
+        || next.scrolls.find((scroll) => !scroll.deleted);
+      if (!replacement) throw new Error('The deleted scroll recovery record has no usable replacement.');
+      replacement.open = true; next.activeId = replacement.id;
+    }
+    const normalized = validateManifest(next);
+    const changed = JSON.stringify(normalized) !== JSON.stringify(manifest);
+    if (changed) {
+      // Durable deletion records are authoritative even when the older manifest
+      // cannot be refreshed yet. Never reopen a deleted main/legacy/orphan file.
+      manifest = normalized;
+      try { await persist(normalized); }
+      catch (error) { console.warn(`ScrollMind deleted scroll list will be refreshed later: ${error.message}`); }
+    }
+    for (const record of records) {
+      try { await moveDeletedOriginals(record); }
+      catch (error) { console.warn(`ScrollMind deleted scroll cleanup will be retried: ${error.message}`); }
+    }
+    return changed;
+  }
+
   function load() {
     return enqueue(async () => {
       if (loaded && !closed) await closeLoaded();
@@ -216,6 +301,7 @@ function createWorkspace(directory, options = {}) {
             await persist(manifest);
           }
         }
+        recovered = await reconcileDeletions() || recovered;
         const { store, result } = await ensureStore(manifest.activeId);
         recovered = await discoverScrolls(store) || recovered;
         return { ...(result || { document: await store.getSnapshot(), recovered: false }), recovered: recovered || result?.recovered || false, workspace: workspaceState() };
@@ -304,17 +390,80 @@ function createWorkspace(directory, options = {}) {
     });
   }
 
+  function deleteScroll(id) {
+    return enqueue(async () => {
+      requireWorkspace();
+      const target = descriptor(id);
+      // Detect a newer/invalid manifest before making a durable deletion intent.
+      await readManifest(manifestPath);
+      const next = structuredClone(manifest);
+      let document;
+      if (id === manifest.activeId) {
+        const other = next.scrolls.filter((scroll) => scroll.id !== id && scroll.open && !scroll.deleted).at(-1);
+        if (other) {
+          next.activeId = other.id;
+          document = await (await ensureStore(other.id)).store.getSnapshot();
+        } else {
+          const current = await (await activeStore()).getSnapshot();
+          const prepared = await prepareNewScroll({ settings: current.settings });
+          next.scrolls.push(prepared.descriptor); next.activeId = prepared.descriptor.id;
+          document = prepared.document;
+        }
+      } else document = await (await activeStore()).getSnapshot();
+      const archiveId = crypto.randomUUID();
+      const archive = path.join(deletedDirectory, archiveId);
+      const pending = path.join(deletedDirectory, `Pending-${archiveId}`);
+      const deleted = next.scrolls.find((scroll) => scroll.id === id);
+      deleted.deleted = true; deleted.open = false; deleted.archiveId = archiveId;
+      delete deleted.sourcePath;
+      const normalized = validateManifest(next);
+      if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > 1024 * 1024) throw new Error('The scroll workspace has reached its maximum size.');
+      await fs.mkdir(pending, { recursive: true });
+      const { store } = await ensureStore(id);
+      await store.close();
+      stores.get(id).loaded = false;
+      // Keep originals in place until a complete recoverable archive is durable.
+      for (const name of ['scroll.sm', 'scroll.backup.sm', 'scroll.sm-wal', 'scroll.sm-shm']) {
+        const source = path.join(storeDirectory(id), name);
+        if (!(await exists(source))) continue;
+        const copy = path.join(pending, name);
+        await fs.copyFile(source, copy, fs.constants.COPYFILE_EXCL);
+        const handle = await fs.open(copy, 'r');
+        try { await handle.sync(); } finally { await handle.close(); }
+      }
+      const record = validateDeletion({ version: 1, id, name: target.name, archiveId, deletedAt: new Date().toISOString(), replacement: normalized.scrolls.find((scroll) => scroll.id === normalized.activeId) }, archiveId);
+      await atomicWrite(path.join(pending, 'deletion.json'), `${JSON.stringify(record, null, 2)}\n`);
+      await fs.rename(pending, archive); // Logical commit: the deletion is now recoverable and durable.
+      let archiveParent;
+      try { archiveParent = await fs.open(deletedDirectory, 'r'); await archiveParent.sync(); }
+      catch (error) { console.warn(`ScrollMind deletion archive directory sync will be retried: ${error.message}`); }
+      finally { await archiveParent?.close().catch(() => {}); }
+      manifest = normalized;
+      stores.delete(id);
+      try { await persist(normalized); }
+      catch (error) { console.warn(`ScrollMind deleted scroll list will be refreshed later: ${error.message}`); }
+      try { await moveDeletedOriginals(record); }
+      catch (error) { console.warn(`ScrollMind deleted scroll cleanup will be retried: ${error.message}`); }
+      return { document, workspace: workspaceState() };
+    });
+  }
+
   async function assertExportDestination(destination) {
     requireWorkspace();
     if (typeof destination !== 'string' || !destination) throw new TypeError('Choose an export file.');
     const resolved = await resolvedDestination(destination);
-    const managed = await resolvedDestination(scrollsDirectory);
-    const relative = path.relative(managed.toLowerCase(), resolved.toLowerCase());
-    if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) throw new Error('Choose an export file outside the managed scroll folders.');
+    for (const folder of [scrollsDirectory, deletedDirectory]) {
+      const managed = await resolvedDestination(folder);
+      const relative = path.relative(managed.toLowerCase(), resolved.toLowerCase());
+      if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) throw new Error('Choose an export file outside the managed scroll folders.');
+    }
     const protectedFiles = [manifestPath, manifestBackupPath, path.join(directory, 'notebook.scrollmind.json'), path.join(directory, 'notebook.backup.json')];
     for (const id of new Set(['main', ...manifest.scrolls.map((scroll) => scroll.id), ...stores.keys()])) {
       const base = path.join(storeDirectory(id), 'scroll.sm');
       protectedFiles.push(base, path.join(storeDirectory(id), 'scroll.backup.sm'), `${base}-wal`, `${base}-shm`);
+    }
+    for (const scroll of manifest.scrolls.filter((item) => item.deleted && item.archiveId)) {
+      for (const name of ['scroll.sm', 'scroll.backup.sm', 'deletion.json', 'original-scroll.sm', 'original-scroll.backup.sm']) protectedFiles.push(path.join(deletedDirectory, scroll.archiveId, name));
     }
     for (const protectedFile of protectedFiles) {
       if (resolved.toLowerCase() === (await resolvedDestination(protectedFile)).toLowerCase()) throw new Error('Choose a different export file so your workspace scrolls stay safe.');
@@ -331,7 +480,7 @@ function createWorkspace(directory, options = {}) {
       requireWorkspace();
       if (typeof sourcePath !== 'string' || !sourcePath) throw new TypeError('Choose a ScrollMind scroll to open.');
       const source = await fs.realpath(sourcePath);
-      const known = manifest.scrolls.find((scroll) => (scroll.sourcePath && scroll.sourcePath.toLowerCase() === source.toLowerCase()) || path.resolve(storeDirectory(scroll.id), 'scroll.sm').toLowerCase() === source.toLowerCase());
+      const known = manifest.scrolls.find((scroll) => !scroll.deleted && ((scroll.sourcePath && scroll.sourcePath.toLowerCase() === source.toLowerCase()) || path.resolve(storeDirectory(scroll.id), 'scroll.sm').toLowerCase() === source.toLowerCase()));
       if (known) return selectInternal(known.id);
       const document = await (await activeStore()).importFile(source);
       const importedName = path.basename(sourcePath, path.extname(sourcePath)).replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 80) || 'Imported scroll';
@@ -367,7 +516,7 @@ function createWorkspace(directory, options = {}) {
 
   return {
     load, save, saveChanges, getSnapshot, importFile, exportFile, backup: exportFile,
-    flush, close, newScroll, selectScroll, closeScroll, renameScroll, openScroll, workspaceState,
+    flush, close, newScroll, selectScroll, closeScroll, deleteScroll, renameScroll, openScroll, workspaceState,
     assertExportDestination: file => enqueue(() => assertExportDestination(file)),
     get filePath() { return path.join(storeDirectory(manifest?.activeId || 'main'), 'scroll.sm'); },
     get backupPath() { return path.join(storeDirectory(manifest?.activeId || 'main'), 'scroll.backup.sm'); },

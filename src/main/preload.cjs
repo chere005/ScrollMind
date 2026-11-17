@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('scrollmind', Object.freeze({
   newScroll: (options) => ipcRenderer.invoke('workspace:new', options),
   selectScroll: (id) => ipcRenderer.invoke('workspace:select', id),
   closeScroll: (id) => ipcRenderer.invoke('workspace:close', id),
+  deleteScroll: (id) => ipcRenderer.invoke('workspace:delete', id),
   renameScroll: (id, name) => ipcRenderer.invoke('workspace:rename', id, name),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),

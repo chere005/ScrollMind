@@ -285,3 +285,154 @@ test('a queued stale save is rejected after a tab switch without changing either
   assert.deepEqual(await workspace.getSnapshot(), document('other'));
   assert.deepEqual((await workspace.selectScroll('main')).document, document('main'));
 });
+
+test('deleting inactive main and the last active scroll removes both lists while retaining recoverable writing', async (t) => {
+  const { workspace, directory, fresh } = await temporary(t);
+  await workspace.load(); await workspace.save(document('main-deleted'));
+  const second = (await workspace.newScroll({ document: document('second-deleted') })).workspace.activeId;
+  const inactive = await workspace.deleteScroll('main');
+  assert.equal(inactive.workspace.activeId, second);
+  assert.deepEqual(inactive.document, document('second-deleted'));
+  assert.equal(inactive.workspace.scrolls.some((scroll) => scroll.id === 'main'), false);
+  await missing(path.join(directory, 'scroll.sm'));
+  const last = await workspace.deleteScroll(second);
+  assert.notEqual(last.workspace.activeId, second);
+  assert.equal(last.workspace.scrolls.length, 1);
+  assert.equal(last.document.strokes.length, 0);
+  assert.equal(last.document.markers.length, 0);
+  for (const id of ['main', second]) {
+    await assert.rejects(workspace.selectScroll(id), /deleted/);
+    await assert.rejects(workspace.closeScroll(id), /deleted/);
+  }
+  const archives = await fs.readdir(path.join(directory, 'Deleted Scrolls'));
+  assert.equal(archives.length, 2);
+  const recovered = [];
+  for (const archive of archives) recovered.push(await workspace.importFile(path.join(directory, 'Deleted Scrolls', archive, 'scroll.sm')));
+  assert.deepEqual(recovered.map((scroll) => scroll.strokes[0].id).sort(), ['main-deleted', 'second-deleted']);
+  assert.deepEqual(recovered.map((scroll) => scroll.markers[0].label).sort(), ['main-deleted', 'second-deleted']);
+  await workspace.close();
+  const restored = fresh();
+  const loaded = await restored.load();
+  assert.equal(loaded.workspace.scrolls.length, 1);
+  assert.equal(loaded.workspace.activeId, last.workspace.activeId);
+  assert.equal(loaded.document.strokes.length, 0);
+});
+
+test('deleting an active managed scroll selects another open scroll without changing its writing', async (t) => {
+  const { workspace } = await temporary(t);
+  await workspace.load(); await workspace.save(document('keep-main'));
+  const other = (await workspace.newScroll({ document: document('remove-other') })).workspace.activeId;
+  const deleted = await workspace.deleteScroll(other);
+  assert.equal(deleted.workspace.activeId, 'main');
+  assert.deepEqual(deleted.document, document('keep-main'));
+  assert.deepEqual(await workspace.getSnapshot(), document('keep-main'));
+});
+
+test('deleted closed scrolls cannot return through manifest backup or orphan recovery', async (t) => {
+  const { workspace, directory, fresh } = await temporary(t);
+  await workspace.load(); await workspace.save(document('main'));
+  const a = (await workspace.newScroll({ document: document('delete-closed') })).workspace.activeId;
+  const b = (await workspace.newScroll({ document: document('keep-active') })).workspace.activeId;
+  await workspace.closeScroll(a);
+  const deleted = await workspace.deleteScroll(a);
+  assert.equal(deleted.workspace.activeId, b);
+  assert.deepEqual(deleted.document, document('keep-active'));
+  await workspace.close();
+  const archive = (await fs.readdir(path.join(directory, 'Deleted Scrolls')))[0];
+  // Simulate a cleanup interruption leaving the old managed file behind.
+  await fs.copyFile(path.join(directory, 'Deleted Scrolls', archive, 'scroll.sm'), path.join(directory, 'Scrolls', a, 'scroll.sm'));
+  await fs.writeFile(path.join(directory, 'workspace.json'), '{corrupt newest manifest');
+  const restored = fresh();
+  const loaded = await restored.load();
+  assert.equal(loaded.error, undefined);
+  assert.equal(loaded.workspace.activeId, b);
+  assert.equal(loaded.workspace.scrolls.some((scroll) => scroll.id === a), false);
+  await assert.rejects(restored.selectScroll(a), /deleted/);
+  assert.deepEqual(loaded.document, document('keep-active'));
+});
+
+test('deleting main preserves app profiles and legacy files without reimporting legacy ink on restart', async (t) => {
+  const { workspace, directory, fresh } = await temporary(t);
+  const legacy = path.join(directory, 'notebook.scrollmind.json');
+  const original = JSON.stringify(document('legacy-deleted'));
+  await fs.writeFile(legacy, original);
+  await fs.mkdir(path.join(directory, 'App'));
+  await fs.writeFile(path.join(directory, 'App', 'profile.json'), '{"keep":true}');
+  await workspace.load();
+  const deleted = await workspace.deleteScroll('main');
+  await workspace.close();
+  assert.equal(await fs.readFile(legacy, 'utf8'), original);
+  assert.equal(await fs.readFile(path.join(directory, 'App', 'profile.json'), 'utf8'), '{"keep":true}');
+  await missing(path.join(directory, 'scroll.sm'));
+  const restored = fresh();
+  const loaded = await restored.load();
+  assert.equal(loaded.workspace.activeId, deleted.workspace.activeId);
+  assert.equal(loaded.document.strokes.length, 0);
+  await missing(path.join(directory, 'scroll.sm'));
+});
+
+test('deleting an imported managed copy leaves the external source untouched and explicit reopen uses a fresh ID', async (t) => {
+  const { workspace, directory } = await temporary(t);
+  const source = createStore(path.join(directory, 'External Source'), { validate: validateSnapshot });
+  await source.load(); await source.save(document('external-kept')); await source.close();
+  const original = await fs.readFile(source.filePath);
+  await workspace.load();
+  const first = (await workspace.openScroll(source.filePath)).workspace.activeId;
+  await workspace.deleteScroll(first);
+  assert.deepEqual(await fs.readFile(source.filePath), original);
+  const reopened = await workspace.openScroll(source.filePath);
+  assert.notEqual(reopened.workspace.activeId, first);
+  assert.deepEqual(reopened.document, document('external-kept'));
+  assert.deepEqual(await fs.readFile(source.filePath), original);
+});
+
+test('precommit deletion failure leaves the current scroll selected and usable', async (t) => {
+  const { workspace, directory } = await temporary(t);
+  await workspace.load(); await workspace.save(document('main-safe'));
+  const active = (await workspace.newScroll({ document: document('active-safe') })).workspace.activeId;
+  const before = workspace.workspaceState();
+  await fs.writeFile(path.join(directory, 'Deleted Scrolls'), 'not a folder');
+  await assert.rejects(workspace.deleteScroll(active), /ENOTDIR|EEXIST/);
+  assert.deepEqual(workspace.workspaceState(), before);
+  assert.deepEqual(await workspace.getSnapshot(), document('active-safe'));
+  await workspace.saveChanges({ scrollId: active, upserts: [stroke('still-writable')] });
+  assert.equal((await workspace.getSnapshot()).strokes.length, 2);
+  assert.deepEqual((await workspace.selectScroll('main')).document, document('main-safe'));
+});
+
+test('postcommit manifest maintenance failure resolves with matching active state and replays deletion on restart', async (t) => {
+  const { workspace, directory, fresh } = await temporary(t);
+  const warnings = [];
+  t.mock.method(console, 'warn', message => warnings.push(message));
+  await workspace.load(); await workspace.save(document('main-kept'));
+  const deletedId = (await workspace.newScroll({ document: document('remove-me') })).workspace.activeId;
+  const backup = path.join(directory, 'workspace.backup.json');
+  await fs.unlink(backup); await fs.mkdir(backup);
+  const deleted = await workspace.deleteScroll(deletedId);
+  assert.equal(deleted.workspace.activeId, 'main');
+  assert.deepEqual(deleted.document, document('main-kept'));
+  assert.deepEqual(await workspace.getSnapshot(), document('main-kept'));
+  assert.equal(deleted.workspace.scrolls.some((scroll) => scroll.id === deletedId), false);
+  assert.ok(warnings.some(message => /deleted scroll list/.test(message)));
+  await fs.rmdir(backup);
+  await workspace.close();
+  const restored = fresh();
+  const loaded = await restored.load();
+  assert.equal(loaded.error, undefined);
+  assert.equal(loaded.workspace.activeId, 'main');
+  assert.equal(loaded.workspace.scrolls.some((scroll) => scroll.id === deletedId), false);
+});
+
+test('corrupt durable deletion records block loading rather than silently resurrect deleted scrolls', async (t) => {
+  const { workspace, directory, fresh } = await temporary(t);
+  await workspace.load(); await workspace.save(document('main'));
+  const removed = (await workspace.newScroll({ document: document('removed') })).workspace.activeId;
+  await workspace.deleteScroll(removed); await workspace.close();
+  const archive = (await fs.readdir(path.join(directory, 'Deleted Scrolls')))[0];
+  await fs.writeFile(path.join(directory, 'Deleted Scrolls', archive, 'deletion.json'), '{broken record');
+  const original = await fs.readFile(path.join(directory, 'scroll.sm'));
+  const restored = fresh();
+  assert.equal(typeof (await restored.load()).error, 'string');
+  await assert.rejects(restored.saveChanges({ upserts: [stroke('must-not-write')] }), /protected/);
+  assert.deepEqual(await fs.readFile(path.join(directory, 'scroll.sm')), original);
+});
