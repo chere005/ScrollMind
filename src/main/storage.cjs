@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const { DatabaseSync, backup: sqliteBackup } = require('node:sqlite');
 
 const APPLICATION_ID = 0x534d4e44; // SMND
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_FILE_BYTES = 1024 * 1024 * 1024;
 const BACKUP_INTERVAL = 5 * 60 * 1000;
 const MAX_STROKES = 100_000;
@@ -46,7 +46,7 @@ function verifySchema(db) {
     throw new UnsupportedScrollError('This file is not a ScrollMind scroll.');
   }
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (version !== 1 && version !== SCHEMA_VERSION) {
+  if (![1, 2, SCHEMA_VERSION].includes(version)) {
     throw new UnsupportedScrollError('This scroll uses an unsupported format version. Update ScrollMind before opening it.');
   }
   for (const [table, originalColumns] of Object.entries(COLUMNS)) {
@@ -157,6 +157,12 @@ function createStore(directory, { validate } = {}) {
       try {
         db.exec(`ALTER TABLE strokes ADD COLUMN pen_type TEXT DEFAULT NULL; PRAGMA user_version=${SCHEMA_VERSION}; COMMIT;`);
       } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
+    } else if (db.prepare('PRAGMA user_version').get().user_version === 2) {
+      // The same columns now support highlighter ink. Older readers must see a
+      // future format and refuse it instead of treating new brush data as damage.
+      db.exec('BEGIN IMMEDIATE');
+      try { db.exec(`PRAGMA user_version=${SCHEMA_VERSION}; COMMIT;`); }
+      catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
     }
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=1000;');
     statements = {

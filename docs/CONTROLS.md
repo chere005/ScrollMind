@@ -4,9 +4,11 @@
 
 Hover over the small circle at the top for 200 ms to expand the controls in place. Small slips outside keep them open; moving farther away closes them after half a second. Clicking or focusing the circle opens them immediately.
 
-Choose **Pen**, **Pencil**, **Fountain**, or **Marker**, then a width: **Fine**, **Medium**, **Bold**, or **Broad**. Pressure changes the width of new strokes. Existing writing keeps its original style.
+Choose **Pen**, **Pencil**, **Fountain**, **Marker**, or **Highlighter**, then a width: **Fine**, **Medium**, **Bold**, or **Broad**. Pressure changes the width of new strokes. Existing writing keeps its original style.
 
-The eight swatches are Black, Graphite, Blue, Green, Red, Orange, Purple, and White. The color wheel adds hue, saturation, brightness, and six-digit hex input. Your pen type, width, and color save with the scroll.
+Highlighter starts with Yellow and Broad width. Its translucent strokes keep writing visible: a continuous pass has uniform opacity, including where it overlaps itself, while separate strokes build color. During the session, switching back restores your previous ink color and width.
+
+The eight swatches are Black, Yellow, Blue, Green, Red, Orange, Purple, and White. The color wheel adds hue, saturation, brightness, and six-digit hex input. Your pen type, width, and color save with the scroll.
 
 The shape dropdown offers Line, Arrow, Rectangle, Ellipse, and Triangle. Choose one and drag on the page. Hold Shift for straight angles, squares, circles, or an equilateral triangle. Shapes can be selected and edited like handwriting.
 

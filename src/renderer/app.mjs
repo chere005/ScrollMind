@@ -1,7 +1,8 @@
 import { Notebook as Scroll, boundsOf, makeStroke, strokeHitsPoint, strokeIntersectsRect, validateStrokes } from '../core/model.mjs';
 import { PenButtonShortcuts } from '../core/pen-shortcuts.mjs';
 import { makeShape } from '../core/shapes.mjs';
-import { brushWidth, brushCap } from '../core/brushes.mjs';
+import { brushWidth, brushCap, brushOpacity } from '../core/brushes.mjs';
+import { strokeGeometry } from '../core/stroke-geometry.mjs';
 import { createPenControls } from './pen-controls.mjs';
 
 const $ = selector => document.querySelector(selector);
@@ -10,7 +11,7 @@ const canvas = $('#canvas'), overlay = $('#overlay');
 const ctx = canvas.getContext('2d', { alpha: false }), ink = overlay.getContext('2d');
 const status = $('#status');
 let scroll = new Scroll();
-let settings = { color: '#243746', width: 3, paper: 'plain', paperTone: 'ivory' };
+let settings = { color: '#171717', width: 3, paper: 'plain', paperTone: 'ivory' };
 let offsetY = 0, tool = 'pen', selection = new Set(), active = null;
 let spaceDown = false, loaded = false, loadError = null;
 let width = innerWidth, height = innerHeight, ratio = devicePixelRatio || 1;
@@ -24,6 +25,8 @@ const penShortcuts = new PenButtonShortcuts();
 let workspace = { activeId: null, scrolls: [] };
 let shapeKind = 'rectangle';
 const scrollSessions = new Map();
+let brushStyles = { ink: null, highlighter: null };
+const paintedPaths = new WeakMap();
 const penControls = createPenControls({
   onColor(color) { finishGesture(); settings.color = color; changed(); },
   focusCanvas() { overlay.focus({ preventScroll: true }); },
@@ -70,7 +73,8 @@ function updateControls() {
   selection = new Set([...selection].filter(id => scroll.get(id)));
   $('#undo').disabled = !scroll.canUndo; $('#redo').disabled = !scroll.canRedo;
   document.querySelectorAll('[data-tool]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
-  document.querySelectorAll('[data-color]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.color === settings.color)));
+  const paletteColor = ['#243746', '#242a35'].includes(settings.color.toLowerCase()) ? settings.paperTone === 'night' ? '#ffffff' : '#171717' : settings.color.toLowerCase();
+  document.querySelectorAll('[data-color]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.color === paletteColor)));
   document.querySelectorAll('[data-width]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.width) === settings.width)));
   $('#selection-hint').textContent = selection.size ? `${selection.size} stroke${selection.size === 1 ? '' : 's'} · drag to move` : '';
   $('#paper-tone').value = settings.paperTone; $('#paper-pattern').value = settings.paper;
@@ -146,6 +150,12 @@ function transformStroke(stroke, t) {
 }
 function drawStroke(paint, stroke) {
   const points = stroke.points; if (!points.length) return;
+  const geometry = strokeGeometry(stroke);
+  if (geometry) {
+    let path = Object.isFrozen(stroke) ? paintedPaths.get(stroke) : null;
+    if (!path) { path = new Path2D(geometry.path); if (Object.isFrozen(stroke) && Object.isFrozen(stroke.points) && stroke.points.every(Object.isFrozen)) paintedPaths.set(stroke, path); }
+    paint.save(); paint.fillStyle = displayColor(stroke.color); paint.globalAlpha = brushOpacity(stroke.penType); paint.fill(path); paint.restore(); return;
+  }
   paint.save();
   paint.strokeStyle = displayColor(stroke.color); paint.fillStyle = displayColor(stroke.color); paint.lineCap = brushCap(stroke.penType); paint.lineJoin = 'round';
   const size = (p, angle = 0) => brushWidth(stroke.width, p ?? .5, stroke.penType, angle);
@@ -357,16 +367,17 @@ async function command(value, detail) {
   else if (value === 'toggle-sidebar') toggleSidebar(); else if (value.startsWith('add-')) addMarker(value.slice(4));
 }
 function cacheScrollSession() {
-  if (workspace.activeId) scrollSessions.set(workspace.activeId, { scroll, settings: { ...settings }, offsetY, tool, selection: new Set(selection) });
+  if (workspace.activeId) scrollSessions.set(workspace.activeId, { scroll, settings: { ...settings }, offsetY, tool, selection: new Set(selection), brushStyles: structuredClone(brushStyles) });
 }
 function activateScroll(result) {
   const id = result.workspace.activeId;
   const cached = scrollSessions.get(id);
   workspace = result.workspace;
   if (cached) {
-    scroll = cached.scroll; settings = { ...cached.settings }; offsetY = cached.offsetY; tool = cached.tool; selection = new Set(cached.selection);
+    scroll = cached.scroll; settings = { ...cached.settings }; offsetY = cached.offsetY; tool = cached.tool; selection = new Set(cached.selection); brushStyles = structuredClone(cached.brushStyles || { ink: null, highlighter: null });
   } else {
     const document = result.document;
+    brushStyles = { ink: null, highlighter: null };
     scroll = new Scroll(document || {});
     const defaults = scroll.snapshot().settings;
     settings = { ...defaults, ...document?.settings };
@@ -432,7 +443,15 @@ document.querySelectorAll('[data-color]').forEach(button => button.addEventListe
 document.querySelectorAll('[data-width]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.width = Number(button.dataset.width); changed(); }));
 for (const name of ['undo', 'redo', 'home', 'fullscreen']) $(`#${name}`).addEventListener('click', () => safely(name));
 for (const name of ['open-sm', 'new-scroll', 'clear-scroll', 'export-sm', 'export-svg', 'export-pdf']) $(`#${name}`).addEventListener('click', () => safely(name));
-$('#pen-type').addEventListener('change', event => { finishGesture(); settings.penType = event.target.value; if (tool !== 'shape') setTool('pen'); changed(); event.target.blur(); overlay.focus({ preventScroll: true }); });
+$('#pen-type').addEventListener('change', event => {
+  finishGesture();
+  const next = event.target.value, wasHighlighter = settings.penType === 'highlighter';
+  if (wasHighlighter !== (next === 'highlighter')) {
+    brushStyles[wasHighlighter ? 'highlighter' : 'ink'] = { color: settings.color, width: settings.width };
+    Object.assign(settings, next === 'highlighter' ? brushStyles.highlighter || { color: '#e2b52b', width: 12 } : brushStyles.ink || { color: '#171717', width: 3 });
+  }
+  settings.penType = next; if (tool !== 'shape') setTool('pen'); changed(); event.target.blur(); overlay.focus({ preventScroll: true });
+});
 $('#shape-select').addEventListener('change', event => { if (!event.target.value) return; shapeKind = event.target.value; setTool('shape'); event.target.blur(); overlay.focus({ preventScroll: true }); });
 $('#controls-link').addEventListener('click', () => safely('help')); $('#help-close').addEventListener('click', () => $('#help').close());
 $('#context-menu').addEventListener('click', event => { const button = event.target.closest('[data-command]'); if (button) { safely(button.dataset.command); $('#context-menu').hidden = true; } });

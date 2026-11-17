@@ -1,5 +1,6 @@
 // The scroll contains only portable data. Drawing and filesystem APIs live elsewhere.
 import { brushWidth, maxBrushWidth, brushCap } from './brushes.mjs';
+import { strokeGeometry, geometryHitsPoint, geometryIntersectsRect } from './stroke-geometry.mjs';
 
 const VERSION = 1;
 const BUCKET_HEIGHT = 1024;
@@ -11,7 +12,7 @@ const MAX_TOTAL_POINTS = 5_000_000;
 const MAX_COORDINATE = 1_000_000_000;
 const MAX_HISTORY = 500;
 const MAX_MARKERS = 10_000;
-const DEFAULT_SETTINGS = Object.freeze({ color: '#242a35', width: 2.5, paper: 'plain', paperTone: 'ivory' });
+const DEFAULT_SETTINGS = Object.freeze({ color: '#171717', width: 3, paper: 'plain', paperTone: 'ivory' });
 const PAPERS = new Set(['plain', 'dots', 'ruled', 'grid']);
 const PAPER_TONES = new Set(['ivory', 'parchment', 'white', 'night']);
 const MARKER_KINDS = new Set(['section', 'page-break', 'marker']);
@@ -147,6 +148,8 @@ function segmentRadius(stroke, a, b = a) {
 function strokeBounds(stroke) {
   // Only immutable model strokes are cached: callers may mutate their own previews.
   if (Object.isFrozen(stroke) && cachedBounds.has(stroke)) return cachedBounds.get(stroke);
+  const geometry = strokeGeometry(stroke);
+  if (geometry) return geometry.bounds;
   let left = Infinity;
   let top = Infinity;
   let right = -Infinity;
@@ -265,6 +268,8 @@ function squareHitsPoint(corners, point, radius) {
 
 export function strokeIntersectsRect(stroke, value) {
   const rect = normalizedRect(value);
+  const geometry = strokeGeometry(stroke);
+  if (geometry) return geometryIntersectsRect(geometry, rect);
   if (!overlaps(strokeBounds(stroke), rect)) return false;
   if (brushCap(stroke.penType) === 'square') {
     if (stroke.points.length === 1) return squareIntersectsRect(squareSegment(stroke, stroke.points[0]), rect);
@@ -304,6 +309,8 @@ export function strokeHitsPoint(stroke, point, radius = 0) {
   finite(point?.x, 'Hit point x');
   finite(point?.y, 'Hit point y');
   finite(radius, 'Hit radius', 0, MAX_COORDINATE);
+  const geometry = strokeGeometry(stroke);
+  if (geometry) return geometryHitsPoint(geometry, point, radius);
   if (!overlaps(strokeBounds(stroke), { x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 })) return false;
   if (brushCap(stroke.penType) === 'square') {
     if (stroke.points.length === 1) return squareHitsPoint(squareSegment(stroke, stroke.points[0]), point, radius);

@@ -189,7 +189,7 @@ test('readonly import rejects future format without modifying source or current 
   await store.save(document());
   const source = path.join(directory, 'future.sm');
   await store.exportFile(source);
-  inspect(source, (db) => db.exec('PRAGMA user_version=3'));
+  inspect(source, (db) => db.exec(`PRAGMA user_version=${SCHEMA_VERSION + 1}`));
   const original = await fs.readFile(source);
   await assert.rejects(store.importFile(source), /unsupported format version/);
   assert.deepEqual(await fs.readFile(source), original);
@@ -256,7 +256,7 @@ function createV1(file, snapshot) {
   } finally { db.close(); }
 }
 
-test('managed schema1 migrates transactionally to schema2 without changing legacy points or appearance', async (t) => {
+test('managed schema1 migrates transactionally to the current schema without changing legacy points or appearance', async (t) => {
   const { store } = await temporary(t);
   createV1(store.filePath, document());
   const originalPoints = inspect(store.filePath, db => db.prepare('SELECT points FROM strokes').get().points);
@@ -264,7 +264,7 @@ test('managed schema1 migrates transactionally to schema2 without changing legac
   assert.deepEqual(loaded.document, document());
   assert.equal(Object.hasOwn(loaded.document.strokes[0], 'penType'), false);
   inspect(store.filePath, db => {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
     const column = db.prepare('PRAGMA table_info(strokes)').all().find(item => item.name === 'pen_type');
     assert.equal(column.notnull, 0);
     assert.equal(column.dflt_value, 'NULL');
@@ -272,7 +272,7 @@ test('managed schema1 migrates transactionally to schema2 without changing legac
     assert.equal(row.points, originalPoints);
     assert.equal(row.pen_type, null);
   });
-  assert.equal(inspect(store.backupPath, db => db.prepare('PRAGMA user_version').get().user_version), 2);
+  assert.equal(inspect(store.backupPath, db => db.prepare('PRAGMA user_version').get().user_version), SCHEMA_VERSION);
 });
 
 test('readonly schema1 import preserves source bytes and omits default pen metadata', async (t) => {
@@ -310,13 +310,13 @@ test('all explicit pen styles and legacy ink survive native export, reopening an
   const { store, fresh, directory } = await temporary(t);
   await store.load();
   const styled = document('legacy');
-  styled.strokes.push(...['pen', 'pencil', 'fountain', 'marker'].map(penType => ({ ...stroke(penType), penType })));
-  styled.settings.penType = 'marker';
+  styled.strokes.push(...['pen', 'pencil', 'fountain', 'marker', 'highlighter'].map(penType => ({ ...stroke(penType), penType })));
+  styled.settings.penType = 'highlighter';
   await store.save(styled);
   assert.deepEqual(await store.getSnapshot(), styled);
   const exported = path.join(directory, 'styled-export.sm');
   await store.exportFile(exported);
-  assert.equal(inspect(exported, db => db.prepare('PRAGMA user_version').get().user_version), 2);
+  assert.equal(inspect(exported, db => db.prepare('PRAGMA user_version').get().user_version), SCHEMA_VERSION);
   assert.deepEqual(await store.importFile(exported), styled);
   await store.close();
   const reopened = fresh();
@@ -329,13 +329,70 @@ test('all explicit pen styles and legacy ink survive native export, reopening an
   assert.deepEqual(loaded.document, styled);
 });
 
-test('schema1 backup recovery creates a schema2 working scroll with unchanged legacy strokes', async (t) => {
+test('schema1 backup recovery creates a current-schema working scroll with unchanged legacy strokes', async (t) => {
   const { store } = await temporary(t);
   await fs.writeFile(store.filePath, 'damaged primary');
   createV1(store.backupPath, document('legacy-backup'));
   const loaded = await store.load();
   assert.equal(loaded.recovered, true);
   assert.deepEqual(loaded.document, document('legacy-backup'));
-  assert.equal(inspect(store.filePath, db => db.prepare('PRAGMA user_version').get().user_version), 2);
+  assert.equal(inspect(store.filePath, db => db.prepare('PRAGMA user_version').get().user_version), SCHEMA_VERSION);
   assert.equal(inspect(store.filePath, db => db.prepare('SELECT pen_type FROM strokes').get().pen_type), null);
+});
+
+function createV2(file, snapshot) {
+  createV1(file, snapshot);
+  inspect(file, db => {
+    db.exec('ALTER TABLE strokes ADD COLUMN pen_type TEXT DEFAULT NULL; PRAGMA user_version=2;');
+    const update = db.prepare('UPDATE strokes SET pen_type=? WHERE id=?');
+    for (const item of snapshot.strokes) update.run(item.penType ?? null, item.id);
+  });
+}
+
+test('managed schema2 advances to schema3 without rewriting legacy or typed stroke rows', async (t) => {
+  const { store } = await temporary(t);
+  const original = document('legacy-v2');
+  original.strokes.push({ ...stroke('explicit-pen'), penType: 'pen' }, { ...stroke('fountain-v2'), penType: 'fountain' });
+  original.settings.penType = 'fountain';
+  createV2(store.filePath, original);
+  const before = inspect(store.filePath, db => db.prepare('SELECT id,points,pen_type FROM strokes ORDER BY order_index').all().map(row => ({ ...row })));
+  inspect(store.filePath, db => db.exec('CREATE TABLE migration_edits (id TEXT); CREATE TRIGGER migration_update AFTER UPDATE ON strokes BEGIN INSERT INTO migration_edits VALUES (NEW.id); END;'));
+  assert.deepEqual((await store.load()).document, original);
+  inspect(store.filePath, db => {
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
+    assert.deepEqual(db.prepare('SELECT id,points,pen_type FROM strokes ORDER BY order_index').all().map(row => ({ ...row })), before);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM migration_edits').get().n, 0);
+  });
+  assert.equal(inspect(store.backupPath, db => db.prepare('PRAGMA user_version').get().user_version), 3);
+});
+
+test('readonly schema2 import retains source bytes, explicit pen types, and legacy omission', async (t) => {
+  const { store, directory } = await temporary(t);
+  await store.load();
+  const source = path.join(directory, 'schema2-import.sm');
+  const original = document('legacy-v2');
+  original.strokes.push({ ...stroke('explicit-pen'), penType: 'pen' }, { ...stroke('marker-v2'), penType: 'marker' });
+  original.settings.penType = 'marker';
+  createV2(source, original);
+  const bytes = await fs.readFile(source);
+  assert.deepEqual(await store.importFile(source), original);
+  assert.deepEqual(await fs.readFile(source), bytes);
+  assert.equal(inspect(source, db => db.prepare('PRAGMA user_version').get().user_version), 2);
+});
+
+test('future capability versions are rejected before brush validation or older-backup fallback', async (t) => {
+  let validationCalls = 0;
+  const { store } = await temporary(t, { validate: snapshot => { validationCalls++; return validateSnapshot(snapshot); } });
+  const future = document('future-primary');
+  future.strokes[0].penType = 'highlighter';
+  createV2(store.filePath, future);
+  inspect(store.filePath, db => db.exec(`PRAGMA user_version=${SCHEMA_VERSION + 1}`));
+  createV2(store.backupPath, document('older-backup'));
+  const primaryBytes = await fs.readFile(store.filePath);
+  const backupBytes = await fs.readFile(store.backupPath);
+  assert.match((await store.load()).error, /unsupported format version/);
+  assert.equal(validationCalls, 0);
+  assert.deepEqual(await fs.readFile(store.filePath), primaryBytes);
+  assert.deepEqual(await fs.readFile(store.backupPath), backupBytes);
+  await assert.rejects(store.saveChanges({ upserts: [stroke('must-not-replace')] }), /preserve an unreadable scroll/);
 });

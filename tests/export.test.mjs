@@ -32,7 +32,8 @@ test('SVG and PDF preserve the new pressure curves and distinct pen nibs without
   const fountain = { ...stroke('fountain', [[0, 90, .9], [30, 90, .9], [30, 120, .9]], 12), penType: 'fountain' };
   const marker = { ...stroke('marker', [[0, 150, .5], [30, 150, .5]], 12), penType: 'marker' };
   const tap = { ...stroke('marker-tap', [[60, 150, .5]], 12), penType: 'marker' };
-  const document = snapshot([old, pen, pencil, fountain, marker, tap]);
+  const highlighter = { ...stroke('highlighter', [[0, 190, .5], [90, 190, .5], [0, 190, .5]], 12, '#e2b52b'), penType: 'highlighter' };
+  const document = snapshot([old, pen, pencil, fountain, marker, tap, highlighter]);
   const svg = exportSVG(document);
   const expected = pressure => String(Number(brushWidth(12, pressure, 'pen').toFixed(4)));
   assert.match(svg, /M0 0L30 0" stroke-width="5\.1"/);
@@ -42,8 +43,15 @@ test('SVG and PDF preserve the new pressure curves and distinct pen nibs without
   assert.match(svg, /data-pen-type="fountain"/);
   assert.match(svg, /data-stroke-id="marker"[^>]*stroke-linecap="square"/);
   assert.match(svg, /data-stroke-id="marker-tap"[^]*?<rect[^>]*fill="#243746" stroke="none"/);
+  const highlight = svg.match(/<g data-stroke-id="highlighter"[^]*?<\/g>/)[0];
+  assert.equal((highlight.match(/<path /g) || []).length, 1);
+  assert.match(highlight, /fill="#e2b52b" stroke="none" opacity="0\.26"/);
+  const smooth = svg.match(/<g data-stroke-id="fountain"[^]*?<\/g>/)[0];
+  assert.equal((smooth.match(/<path /g) || []).length, 1);
+  assert.doesNotMatch(svg, /<image/);
   const { html } = exportPDFHTML(document);
-  for (const penType of ['pen', 'pencil', 'fountain', 'marker']) assert.ok(html.includes(`data-pen-type="${penType}"`));
+  for (const penType of ['pen', 'pencil', 'fountain', 'marker', 'highlighter']) assert.ok(html.includes(`data-pen-type="${penType}"`));
+  assert.match(html, /data-pen-type="highlighter"[^]*?opacity="0\.26"/);
   assert.ok(html.includes(`M60 30L90 30" stroke-width="${expected(.9)}"`));
 });
 
