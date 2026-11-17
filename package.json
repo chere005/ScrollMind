@@ -1,0 +1,35 @@
+{
+  "name": "scrollmind",
+  "productName": "ScrollMind",
+  "version": "0.1.0",
+  "description": "A quiet, infinite sheet for your pen display.",
+  "private": true,
+  "main": "src/main/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/*.test.mjs",
+    "test:ui": "playwright test",
+    "preflight": "npm test && npm run test:ui",
+    "icon": "node tools/make-icon.mjs",
+    "build:mac": "electron-builder --mac --dir"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "electron": "44.11.3",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.seancheren.scrollmind",
+    "productName": "ScrollMind",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "target": "dir"
+    }
+  }
+}

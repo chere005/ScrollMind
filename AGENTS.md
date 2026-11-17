@@ -1,0 +1,4 @@
+- Keep the drawing model platform independent in src/core and OS integration in src/main.
+- Run npm run preflight before merging or pushing; UI tests must run with hidden windows.
+- Keep writing in ~/Documents/ScrollMind and save atomically before closing.
+- Do not enable GitHub workflows until the same checks pass locally.
