@@ -436,3 +436,42 @@ test('corrupt durable deletion records block loading rather than silently resurr
   await assert.rejects(restored.saveChanges({ upserts: [stroke('must-not-write')] }), /protected/);
   assert.deepEqual(await fs.readFile(path.join(directory, 'scroll.sm')), original);
 });
+
+test('default names reuse the bare Scroll name and lowest available number after deletion and restart', async (t) => {
+  const { workspace, fresh } = await temporary(t);
+  await workspace.load();
+  const two = (await workspace.newScroll({ name: 'Scroll 2' })).workspace.activeId;
+  await workspace.newScroll({ name: 'Scroll 3' });
+  await workspace.deleteScroll('main');
+  await workspace.deleteScroll(two);
+  const bare = await workspace.newScroll();
+  assert.equal(bare.workspace.scrolls.find((scroll) => scroll.active).name, 'Scroll');
+  await workspace.close();
+  const restored = fresh();
+  await restored.load();
+  const reused = await restored.newScroll();
+  assert.equal(reused.workspace.scrolls.find((scroll) => scroll.active).name, 'Scroll 1');
+  const next = await restored.newScroll();
+  assert.equal(next.workspace.scrolls.find((scroll) => scroll.active).name, 'Scroll 2');
+});
+
+test('closed names remain reserved without regard to case or whitespace and explicit names stay explicit', async (t) => {
+  const { workspace } = await temporary(t);
+  await workspace.load();
+  await workspace.renameScroll('main', '  sCrOlL  ');
+  const reserved = (await workspace.newScroll({ name: '  scroll 1  ' })).workspace.activeId;
+  await workspace.closeScroll(reserved);
+  const numbered = await workspace.newScroll();
+  assert.equal(numbered.workspace.scrolls.find((scroll) => scroll.active).name, 'Scroll 2');
+  const explicit = await workspace.newScroll({ name: 'My Ideas' });
+  assert.equal(explicit.workspace.scrolls.find((scroll) => scroll.active).name, 'My Ideas');
+  assert.equal(explicit.workspace.scrolls.find((scroll) => scroll.id === reserved).name, 'scroll 1');
+});
+
+test('deleting the final Scroll tab can reuse its own name for the replacement', async (t) => {
+  const { workspace } = await temporary(t);
+  await workspace.load();
+  await workspace.renameScroll('main', 'Scroll');
+  const replaced = await workspace.deleteScroll('main');
+  assert.equal(replaced.workspace.scrolls.find((scroll) => scroll.active).name, 'Scroll');
+});

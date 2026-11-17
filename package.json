@@ -1,7 +1,7 @@
 {
   "name": "scrollmind",
   "productName": "ScrollMind",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A quiet, infinite sheet for your pen display.",
   "private": true,
   "main": "src/main/main.cjs",
@@ -11,7 +11,8 @@
     "test:ui": "playwright test",
     "preflight": "npm test && npm run test:ui",
     "icon": "node tools/make-icon.mjs",
-    "build:mac": "electron-builder --mac --dir"
+    "build:mac": "electron-builder --mac --dir",
+    "release:mac": "npm run preflight && node tools/release-mac.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.65.1",
@@ -28,8 +29,13 @@
     "mac": {
       "icon": "build/icon.png",
       "category": "public.app-category.productivity",
-      "identity": null,
-      "target": "dir"
+      "identity": "Sean Cheren (2LGYTL3FSJ)",
+      "target": "dir",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "preAutoEntitlements": false,
+      "notarize": false
     },
     "fileAssociations": [
       {
@@ -38,6 +44,8 @@
         "role": "Editor",
         "mimeType": "application/x-scrollmind"
       }
-    ]
-  }
+    ],
+    "forceCodeSigning": true
+  },
+  "author": "Sean Cheren"
 }

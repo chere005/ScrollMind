@@ -60,6 +60,16 @@ async function selectScroll(id) {
   await expect.poll(async () => (await workspace()).activeId).toBe(id);
 }
 
+async function openPenControls() {
+  if (await page.locator('#toolbar').isHidden()) await page.locator('#pen-controls-toggle').hover();
+  await expect(page.locator('#toolbar')).toBeVisible();
+}
+
+async function clickPenControl(selector) {
+  await openPenControls();
+  await page.locator(selector).click();
+}
+
 function readNativeScroll(file) {
   const database = new DatabaseSync(file, { readOnly: true });
   try {
@@ -98,7 +108,7 @@ async function drag(from, to, { steps = 12 } = {}) {
 }
 
 async function draw(from = { x: 220, y: 250 }, to = { x: 430, y: 300 }) {
-  await page.locator('[data-tool="pen"]').click();
+  await clickPenControl('[data-tool="pen"]');
   await drag(from, to);
 }
 
@@ -129,7 +139,7 @@ test('rectangle crossing selects a whole stroke; mouse moves, clipboard edits an
   const original = (await snapshot()).strokes[0];
   expect(original.points.length).toBeGreaterThan(2);
 
-  await page.locator('[data-tool="select"]').click();
+  await clickPenControl('[data-tool="select"]');
   // Both endpoints lie outside the selection: segment intersection must still select.
   await drag({ x: 310, y: 225 }, { x: 360, y: 295 });
   await expect.poll(async () => (await selection()).length).toBe(1);
@@ -160,7 +170,7 @@ test('rectangle crossing selects a whole stroke; mouse moves, clipboard edits an
 });
 
 test('signed vertical scrolling and pen pressure work without hover erasing', async () => {
-  await page.locator('[data-tool="pen"]').click();
+  await clickPenControl('[data-tool="pen"]');
   await pointer('pointerdown', 200, 300, { pressure: 0.2 });
   await pointer('pointermove', 260, 320, { pressure: 0.8 });
   await pointer('pointerup', 300, 340, { pressure: 0, buttons: 0, button: 0 });
@@ -192,7 +202,7 @@ test('signed vertical scrolling and pen pressure work without hover erasing', as
   await expect.poll(async () => (await snapshot()).strokes.length).toBe(1);
 });
 
-test('barrel erasing requires a fresh tip tap, deletes only at touchdown, and each tap undoes separately', async () => {
+test('barrel erasing requires fresh contact, sweeps crossed strokes, and each drag undoes together', async () => {
   await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
   await draw({ x: 200, y: 400 }, { x: 400, y: 400 });
   await draw({ x: 200, y: 550 }, { x: 400, y: 550 });
@@ -208,16 +218,16 @@ test('barrel erasing requires a fresh tip tap, deletes only at touchdown, and ea
   await pointer('pointermove', 300, 250, { pressure: 0.6, buttons: 3, button: 0 });
   await expect.poll(async () => (await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
   await pointer('pointermove', 300, 400, { pressure: 0.7, buttons: 3, button: -1 });
-  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([third.id]);
 
-  // Lifting the tip, without releasing the barrel, permits a second independent tap.
+  // Lifting the tip, without releasing the barrel, permits a second erase gesture.
   await pointer('pointermove', 300, 400, { pressure: 0, buttons: 2, button: 0 });
-  await pointer('pointermove', 300, 400, { pressure: 0.6, buttons: 3, button: 0 });
-  await expect.poll(async () => (await snapshot()).strokes.map(stroke => stroke.id)).toEqual([third.id]);
-  await pointer('pointermove', 300, 400, { pressure: 0, buttons: 2, button: 0 });
-  await pointer('pointerup', 300, 400, { pressure: 0, buttons: 0, button: 2 });
+  await pointer('pointermove', 300, 550, { pressure: 0.6, buttons: 3, button: 0 });
+  await expect.poll(async () => (await snapshot()).strokes.length).toBe(0);
+  await pointer('pointermove', 300, 550, { pressure: 0, buttons: 2, button: 0 });
+  await pointer('pointerup', 300, 550, { pressure: 0, buttons: 0, button: 2 });
   await page.keyboard.press(`${modifier}+z`);
-  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([third.id]);
   await page.keyboard.press(`${modifier}+z`);
   expect((await snapshot()).strokes).toEqual(original);
 
@@ -245,12 +255,24 @@ test('barrel erasing requires a fresh tip tap, deletes only at touchdown, and ea
   expect(afterChord).toHaveLength(4);
   await page.keyboard.press(`${modifier}+z`);
   expect((await snapshot()).strokes).toEqual(original);
+
+  // Adding the scrolling button ends an erase drag before it crosses more ink.
+  await pointer('pointerdown', 300, 250, { pressure: 0.5, buttons: 2, button: 2 });
+  await pointer('pointermove', 300, 250, { pressure: 0.6, buttons: 3, button: 0 });
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+  await pointer('pointermove', 300, 400, { pressure: 0.6, buttons: 7, button: 1 });
+  await pointer('pointermove', 300, 550, { pressure: 0.6, buttons: 7, button: -1 });
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+  await pointer('pointermove', 300, 550, { pressure: 0, buttons: 6, button: 0 });
+  await pointer('pointerup', 300, 550, { pressure: 0, buttons: 0, button: 2 });
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toEqual(original);
 });
 
 test('selection corner resizes preserve pressure, Shift keeps shape, and nudges undo cleanly', async () => {
   await draw({ x: 220, y: 250 }, { x: 430, y: 330 });
   const original = (await snapshot()).strokes[0];
-  await page.locator('[data-tool="select"]').click();
+  await clickPenControl('[data-tool="select"]');
   await drag({ x: 190, y: 220 }, { x: 460, y: 360 });
   await expect.poll(async () => (await selection()).length).toBe(1);
 
@@ -299,7 +321,7 @@ test('optional sidebar styles paper and saves sections, page breaks and writing 
   await expect.poll(() => page.evaluate(() => window.scrollmindDebug.getOffsetY())).toBe(sectionY - 130);
   await page.getByRole('button', { name: 'Remove Meeting notes', exact: true }).click();
   await expect.poll(async () => (await snapshot()).markers.length).toBe(2);
-  await page.locator('#undo').click();
+  await clickPenControl('#undo');
   await expect.poll(async () => (await snapshot()).markers.length).toBe(3);
   expect((await snapshot()).markers.find(marker => marker.kind === 'section').label).toBe('Meeting notes');
   await page.locator('#sidebar-toggle').click();
@@ -342,7 +364,7 @@ test('opening a damaged primary recovers visible writing and preserves the damag
 });
 
 test('exports independent editable SM, vector SVG and paginated PDF, then reopens the SM for editing', async () => {
-  await page.locator('[data-tool="pen"]').click();
+  await clickPenControl('[data-tool="pen"]');
   await pointer('pointerdown', 380, 250, { pressure: 0.2 });
   await pointer('pointermove', 430, 270, { pressure: 0.8 });
   await pointer('pointerup', 430, 270, { pressure: 0, buttons: 0 });
@@ -526,10 +548,10 @@ test('clear removes all current content in one undo action and leaves other scro
   expect((await snapshot()).strokes).toEqual([]);
   expect((await snapshot()).markers).toEqual([]);
   expect((await snapshot()).settings).toEqual(beforeClear.settings);
-  await page.locator('#undo').click();
+  await clickPenControl('#undo');
   expect((await snapshot()).strokes).toEqual(beforeClear.strokes);
   expect((await snapshot()).markers).toEqual(beforeClear.markers);
-  await page.locator('#redo').click();
+  await clickPenControl('#redo');
   expect((await snapshot()).strokes).toEqual([]);
   expect((await snapshot()).markers).toEqual([]);
   await selectScroll(firstId);
@@ -621,10 +643,10 @@ test('delete removes inactive and last scrolls without losing other history or t
   expect((await workspace()).activeId).toBe(secondId);
   expect((await snapshot()).strokes).toEqual(secondContent.strokes);
   expect((await snapshot()).markers).toEqual(secondContent.markers);
-  await page.locator('#undo').click();
+  await clickPenControl('#undo');
   expect((await snapshot()).strokes).toEqual(beforeSecondInk.strokes);
   expect((await snapshot()).markers).toEqual(beforeSecondInk.markers);
-  await page.locator('#redo').click();
+  await clickPenControl('#redo');
   expect((await snapshot()).strokes).toEqual(secondContent.strokes);
   await expect(page.locator(`.scroll-reopen[data-scroll-id="${firstId}"]`)).toHaveCount(0);
 
@@ -659,4 +681,138 @@ test('delete removes inactive and last scrolls without losing other history or t
   await showSidebar();
   await expect(page.locator(`.scroll-reopen[data-scroll-id="${firstId}"]`)).toHaveCount(0);
   await expect(page.locator(`.scroll-reopen[data-scroll-id="${secondId}"]`)).toHaveCount(0);
+});
+
+test('pen controls open after deliberate hover, stay usable inside, and collapse after leaving', async () => {
+  const toolbar = page.locator('#toolbar');
+  const toggle = page.locator('#pen-controls-toggle');
+  await page.mouse.move(1000, 650);
+  await expect(toolbar).toBeHidden();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.hover();
+  await page.waitForTimeout(80);
+  await expect(toolbar).toBeHidden();
+  await page.mouse.move(1000, 650);
+  await page.waitForTimeout(250);
+  await expect(toolbar).toBeHidden();
+
+  await toggle.hover();
+  await expect(toolbar).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await page.locator('[data-tool="select"]').hover();
+  await page.waitForTimeout(300);
+  await expect(toolbar).toBeVisible();
+  await page.locator('[data-tool="select"]').click();
+  await expect(page.locator('[data-tool="select"]')).toHaveAttribute('aria-pressed', 'true');
+
+  await page.locator('#color-wheel-toggle').click();
+  await expect(page.locator('#color-picker')).toBeVisible();
+  await page.locator('#color-value').focus();
+  await page.mouse.move(1000, 650);
+  await page.waitForTimeout(350);
+  await expect(toolbar).toBeVisible();
+  await page.locator('#overlay').focus();
+  await expect(toolbar).toBeHidden();
+  await toggle.focus();
+  await expect(toolbar).toBeVisible();
+});
+
+test('basic shapes support negative drags, ordinary selection and undo, and editable SQLite persistence', async () => {
+  let previousCount = 0, beforeLastShape;
+  for (const [index, shape] of ['line', 'arrow', 'rectangle', 'ellipse', 'triangle'].entries()) {
+    await openPenControls();
+    await page.locator('#shape-select').selectOption(shape);
+    if (shape === 'rectangle') await clickPenControl('[data-color="#b94d49"]');
+    beforeLastShape = (await snapshot()).strokes;
+    await drag({ x: 520, y: 250 + index * 65 }, { x: 350, y: 200 + index * 65 });
+    await expect.poll(async () => (await snapshot()).strokes.length).toBeGreaterThan(previousCount);
+    if (shape === 'rectangle') {
+      const rectangle = (await snapshot()).strokes.at(-1);
+      expect(rectangle.color).toBe('#b94d49');
+      expect(rectangle.points.map(({ x, y }) => [x, y])).toEqual([[350, 330], [520, 330], [520, 380], [350, 380], [350, 330]]);
+    }
+    previousCount = (await snapshot()).strokes.length;
+  }
+  const allShapes = (await snapshot()).strokes;
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toEqual(beforeLastShape);
+  await page.keyboard.press(`${modifier}+Shift+z`);
+  expect((await snapshot()).strokes).toEqual(allShapes);
+  await page.keyboard.press('v');
+  await page.keyboard.press(`${modifier}+a`);
+  expect((await selection()).length).toBe(allShapes.length);
+  await drag({ x: 435, y: 355 }, { x: 485, y: 390 });
+  const moved = (await snapshot()).strokes;
+  for (let strokeIndex = 0; strokeIndex < allShapes.length; strokeIndex++) {
+    expect(moved[strokeIndex].id).toBe(allShapes[strokeIndex].id);
+    for (let pointIndex = 0; pointIndex < allShapes[strokeIndex].points.length; pointIndex++) {
+      expect(moved[strokeIndex].points[pointIndex].x).toBeCloseTo(allShapes[strokeIndex].points[pointIndex].x + 50, 5);
+      expect(moved[strokeIndex].points[pointIndex].y).toBeCloseTo(allShapes[strokeIndex].points[pointIndex].y + 35, 5);
+    }
+  }
+  await closeGracefully();
+  expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toEqual(moved);
+  await launch();
+  expect((await snapshot()).strokes).toEqual(moved);
+});
+
+test('the color wheel, brightness and custom hex affect actual ink and persist on restart', async () => {
+  await openPenControls();
+  await page.locator('#color-wheel-toggle').click();
+  await expect(page.locator('#color-picker')).toBeVisible();
+  const wheel = await page.locator('#color-wheel').boundingBox();
+  await page.mouse.click(wheel.x + wheel.width * 0.85, wheel.y + wheel.height / 2);
+  const wheelColor = (await snapshot()).settings.color;
+  expect(wheelColor).toMatch(/^#[0-9a-f]{6}$/i);
+  expect(wheelColor).not.toBe('#243746');
+  await page.locator('#color-value').evaluate(input => {
+    input.value = '35';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const shadedColor = (await snapshot()).settings.color;
+  expect(shadedColor).not.toBe(wheelColor);
+  await page.locator('#overlay').focus();
+  await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+  expect((await snapshot()).strokes[0].color).toBe(shadedColor);
+
+  await openPenControls();
+  if (await page.locator('#color-picker').isHidden()) await page.locator('#color-wheel-toggle').click();
+  const wheelEvent = (type, x, y, buttons = 0) => page.evaluate(({ type, x, y, buttons }) => {
+    const wheel = document.querySelector('#color-wheel'), bounds = wheel.getBoundingClientRect();
+    wheel.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 91, pointerType: 'pen', isPrimary: true,
+      clientX: bounds.left + bounds.width * x, clientY: bounds.top + bounds.height * y,
+      buttons, button: 0, pressure: buttons ? 0.5 : 0,
+    }));
+  }, { type, x, y, buttons });
+  await wheelEvent('pointerdown', 0.3, 0.3, 1);
+  const beforeLostCapture = (await snapshot()).settings.color;
+  await wheelEvent('lostpointercapture', 0.3, 0.3);
+  await wheelEvent('pointermove', 0.8, 0.7);
+  expect((await snapshot()).settings.color).toBe(beforeLostCapture);
+  await wheelEvent('pointerup', 0.8, 0.7);
+  await wheelEvent('pointerdown', 0.3, 0.7, 1);
+  const beforeBlur = (await snapshot()).settings.color;
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(page.locator('#color-picker')).toBeHidden();
+  await wheelEvent('pointermove', 0.8, 0.3);
+  expect((await snapshot()).settings.color).toBe(beforeBlur);
+  await openPenControls();
+  await page.locator('#color-wheel-toggle').click();
+  await wheelEvent('pointerdown', 0.8, 0.5, 1);
+  await wheelEvent('pointerup', 0.8, 0.5);
+  expect((await snapshot()).settings.color).not.toBe(beforeBlur);
+  const hex = page.getByLabel('Hex color', { exact: true });
+  await hex.fill('#8a42cc');
+  await hex.press('Enter');
+  await page.locator('#overlay').focus();
+  await expect.poll(async () => (await snapshot()).settings.color).toBe('#8a42cc');
+  await draw({ x: 850, y: 500 }, { x: 960, y: 540 });
+  const expected = (await snapshot()).strokes;
+  expect(expected[1].color).toBe('#8a42cc');
+  await closeGracefully();
+  expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toEqual(expected);
+  await launch();
+  expect((await snapshot()).settings.color).toBe('#8a42cc');
+  expect((await snapshot()).strokes).toEqual(expected);
 });

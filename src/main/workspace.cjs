@@ -312,10 +312,16 @@ function createWorkspace(directory, options = {}) {
     });
   }
 
-  async function prepareNewScroll({ name, document, settings, sourcePath } = {}) {
+  function availableScrollName(ignoredId) {
+    const used = new Set(manifest.scrolls.filter((scroll) => !scroll.deleted && scroll.id !== ignoredId).map((scroll) => scroll.name.trim().toLowerCase()));
+    if (!used.has('scroll')) return 'Scroll';
+    for (let number = 1; ; number++) if (!used.has(`scroll ${number}`)) return `Scroll ${number}`;
+  }
+
+  async function prepareNewScroll({ name, document, settings, sourcePath } = {}, ignoredNameId) {
     if (manifest.scrolls.length >= MAX_SCROLLS) throw new Error('This workspace already contains the maximum number of scrolls.');
     const id = crypto.randomUUID();
-    const nextDescriptor = { id, name: validName(name === undefined ? `Scroll ${manifest.scrolls.length + 1}` : name), open: true, ...(sourcePath ? { sourcePath } : {}) };
+    const nextDescriptor = { id, name: validName(name === undefined ? availableScrollName(ignoredNameId) : name), open: true, ...(sourcePath ? { sourcePath } : {}) };
     const { store } = await ensureStore(id);
     if (document !== undefined) await store.save(document);
     else if (settings !== undefined) await store.saveChanges({ settings, view: { offsetY: 0 } });
@@ -405,7 +411,7 @@ function createWorkspace(directory, options = {}) {
           document = await (await ensureStore(other.id)).store.getSnapshot();
         } else {
           const current = await (await activeStore()).getSnapshot();
-          const prepared = await prepareNewScroll({ settings: current.settings });
+          const prepared = await prepareNewScroll({ settings: current.settings }, id);
           next.scrolls.push(prepared.descriptor); next.activeId = prepared.descriptor.id;
           document = prepared.document;
         }

@@ -28,6 +28,14 @@
 
 The selection tool uses a rectangle by default. A rectangle that crosses a stroke selects the whole stroke. Moving and copying preserve pressure and stroke shape. Each complete pen stroke, erase gesture, or selection move can be undone.
 
+## Pen controls, shapes and colors
+
+The small circle at the top of the page expands after a 200 ms hover. Move from it into the controls to choose a tool, color, or pen size. The controls collapse after you leave; clicking or focusing the circle opens them immediately. A focused brightness slider keeps the color picker available while you adjust it.
+
+The shape dropdown offers **Line**, **Arrow**, **Rectangle**, **Ellipse**, and **Triangle**. Choose a shape, then drag in either direction on the page to draw it. Hold Shift for straight angles, squares, circles, or an equilateral triangle. Shapes are ordinary editable strokes: select, move, copy, resize, or undo them with the same controls as handwriting.
+
+Open the color wheel to choose hue and saturation, adjust brightness with the slider, or enter a six-digit hex color. The quick color swatches remain available. Your chosen color saves with the scroll and applies to new ink and shapes.
+
 ## Paper and navigation
 
 The sidebar starts hidden. Its toggle opens paper settings and a list of places on the sheet. Paper can be plain, dotted, ruled, or a square grid, with white, ivory, parchment, and dark backgrounds.
@@ -36,7 +44,7 @@ Use **Section**, **Marker**, or **Page break** to add a navigation point at the 
 
 ## Wacom buttons
 
-The app responds to standard mouse-button actions from the pen driver. A useful app-specific Wacom profile assigns the lower pen button to **Right Click**: hold the button, then tap the pen tip on a stroke to delete it. A single button click does nothing, and dragging after a tap does not erase more writing. Lift the tip and tap again to delete another stroke; pressing the button during an existing pen stroke does not delete writing. Double-click the lower button while hovering to undo. Assign the upper pen button to **Middle Click** for vertical panning; double-click it while hovering to redo. Deleting by tip taps and dragging to scroll do not count as double-click commands. The toolbar eraser and a pen's rear eraser erase continuously while in contact with the page.
+The app responds to standard mouse-button actions from the pen driver. A useful app-specific Wacom profile assigns the lower pen button to **Right Click**: hold the button, then touch or drag the pen tip across strokes to delete them. A single button click does nothing. Each continuous erase drag is one undo action; lifting the tip ends it. Pressing the button during an existing pen stroke does not begin erasing until you lift and touch down again. Double-click the lower button while hovering to undo. Assign the upper pen button to **Middle Click** for vertical panning; double-click it while hovering to redo. Erasing and dragging to scroll do not count as double-click commands. The toolbar eraser and a pen's rear eraser also erase continuously while in contact with the page.
 
 For tablets with ExpressKeys, useful assignments are **⌘Z**, **⌘⇧Z**, **B**, **E**, **V**, **H**, and **Tab**. A touch strip or ring assigned to vertical scrolling moves along the sheet. ScrollMind handles these events; it does not modify the Wacom driver's button assignments.
 
@@ -44,7 +52,7 @@ For tablets with ExpressKeys, useful assignments are **⌘Z**, **⌘⇧Z**, **B*
 
 ScrollMind prefers a display with Wacom or Cintiq in its name. Other screens can be selected from its display control. When macOS mirrors screens, they show the same app; independent positioning requires an extended desktop.
 
-The sidebar lists your open scrolls. **New Scroll** creates another; select a scroll to switch, rename it with its pencil button, or close it with ×. Closed scrolls remain saved and can be reopened from **Other scrolls**. Each open scroll keeps its own undo history during the session. The app restores the workspace and active scroll after restarting.
+The sidebar lists your open scrolls. **New Scroll** creates another; select a scroll to switch, rename it with its pencil button, or close it with ×. Closed scrolls remain saved and can be reopened from **Other scrolls**. Each open scroll keeps its own undo history during the session. The app restores the workspace and active scroll after restarting. New scrolls use the first available name: Scroll, Scroll 1, Scroll 2, and so on. Deleting a scroll frees its name; closing it keeps the name reserved.
 
 The trash button deletes a scroll from the workspace and **Other scrolls**, keeping a recoverable copy in `Documents/ScrollMind/Deleted Scrolls`; other scrolls and any original imported `.sm` file remain unchanged.
 
