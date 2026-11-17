@@ -34,7 +34,7 @@ Use **Section**, **Marker**, or **Page break** to add a navigation point at the 
 
 ## Wacom buttons
 
-The app responds to standard mouse-button actions from the pen driver. A useful app-specific Wacom profile assigns the lower pen button to **Right Click** for temporary erasing and the upper pen button to **Middle Click** for vertical panning. A pen with a rear eraser can also erase by flipping it over. Erasing requires pen contact so a hovering barrel button does not remove writing.
+The app responds to standard mouse-button actions from the pen driver. A useful app-specific Wacom profile assigns the lower pen button to **Right Click**: hold the button, then tap the pen tip on a stroke to delete it. The button alone does nothing, and dragging after a tap does not erase more writing. Lift the tip and tap again to delete another stroke; pressing the button during an existing pen stroke does not delete writing. Assign the upper pen button to **Middle Click** for vertical panning. The toolbar eraser and a pen's rear eraser erase continuously while in contact with the page.
 
 For tablets with ExpressKeys, useful assignments are **⌘Z**, **⌘⇧Z**, **B**, **E**, **V**, **H**, and **Tab**. A touch strip or ring assigned to vertical scrolling moves along the sheet. ScrollMind handles these events; it does not modify the Wacom driver's button assignments.
 

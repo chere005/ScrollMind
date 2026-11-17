@@ -156,7 +156,7 @@ test('signed vertical scrolling and pen pressure work without hover erasing', as
   expect(stroke.points.some(point => point.p > 0.7)).toBe(true);
 
   await pointer('pointerdown', 250, 315, { pressure: 0, buttons: 2, button: 2 });
-  await pointer('pointermove', 260, 320, { pressure: 0, buttons: 2, button: 2 });
+  await pointer('pointermove', 260, 320, { pressure: 0.5, buttons: 2, button: 2 });
   await pointer('pointerup', 260, 320, { pressure: 0, buttons: 0, button: 2 });
   expect((await snapshot()).strokes).toHaveLength(1);
 
@@ -169,11 +169,68 @@ test('signed vertical scrolling and pen pressure work without hover erasing', as
   await page.keyboard.press(`${modifier}+0`);
   await expect.poll(() => page.evaluate(() => window.scrollmindDebug.getOffsetY())).toBe(0);
   await pointer('pointerdown', 250, 315, { pressure: 0.5, buttons: 2, button: 2 });
-  await pointer('pointermove', 260, 320, { pressure: 0.6, buttons: 2, button: 2 });
+  await pointer('pointermove', 250, 315, { pressure: 0.6, buttons: 3, button: 0 });
+  await pointer('pointermove', 260, 320, { pressure: 0.6, buttons: 3, button: -1 });
+  await pointer('pointermove', 260, 320, { pressure: 0, buttons: 2, button: 0 });
   await pointer('pointerup', 260, 320, { pressure: 0, buttons: 0, button: 2 });
   await expect.poll(async () => (await snapshot()).strokes.length).toBe(0);
   await page.keyboard.press(`${modifier}+z`);
   await expect.poll(async () => (await snapshot()).strokes.length).toBe(1);
+});
+
+test('barrel erasing requires a fresh tip tap, deletes only at touchdown, and each tap undoes separately', async () => {
+  await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
+  await draw({ x: 200, y: 400 }, { x: 400, y: 400 });
+  await draw({ x: 200, y: 550 }, { x: 400, y: 550 });
+  const original = (await snapshot()).strokes;
+  const [first, second, third] = original;
+
+  // Drivers can report nonzero pressure when only the barrel button is held.
+  await pointer('pointerdown', 300, 250, { pressure: 0.5, buttons: 2, button: 2 });
+  await pointer('pointermove', 305, 250, { pressure: 0.5, buttons: 2, button: -1 });
+  expect((await snapshot()).strokes).toEqual(original);
+
+  // Tip contact is a buttons 2 -> 3 edge while the barrel remains held.
+  await pointer('pointermove', 300, 250, { pressure: 0.6, buttons: 3, button: 0 });
+  await expect.poll(async () => (await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+  await pointer('pointermove', 300, 400, { pressure: 0.7, buttons: 3, button: -1 });
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+
+  // Lifting the tip, without releasing the barrel, permits a second independent tap.
+  await pointer('pointermove', 300, 400, { pressure: 0, buttons: 2, button: 0 });
+  await pointer('pointermove', 300, 400, { pressure: 0.6, buttons: 3, button: 0 });
+  await expect.poll(async () => (await snapshot()).strokes.map(stroke => stroke.id)).toEqual([third.id]);
+  await pointer('pointermove', 300, 400, { pressure: 0, buttons: 2, button: 0 });
+  await pointer('pointerup', 300, 400, { pressure: 0, buttons: 0, button: 2 });
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([second.id, third.id]);
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toEqual(original);
+
+  // Returning after focus loss with the tip already down is not a new tap.
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await pointer('pointermove', 300, 550, { pressure: 0.6, buttons: 3, button: -1 });
+  expect((await snapshot()).strokes).toEqual(original);
+  await pointer('pointermove', 300, 550, { pressure: 0, buttons: 2, button: 0 });
+  await pointer('pointermove', 300, 550, { pressure: 0.6, buttons: 3, button: 0 });
+  expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([first.id, second.id]);
+  await pointer('pointermove', 300, 550, { pressure: 0, buttons: 2, button: 0 });
+  await pointer('pointerup', 300, 550, { pressure: 0, buttons: 0, button: 2 });
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toEqual(original);
+
+  // Pressing the barrel after the tip was already writing must not delete nearby ink.
+  await pointer('pointerdown', 600, 250, { pressure: 0.4, buttons: 1, button: 0 });
+  await pointer('pointermove', 650, 300, { pressure: 0.6, buttons: 1, button: -1 });
+  await pointer('pointermove', 300, 550, { pressure: 0.6, buttons: 3, button: 2 });
+  await pointer('pointermove', 310, 550, { pressure: 0.6, buttons: 3, button: -1 });
+  await pointer('pointermove', 310, 550, { pressure: 0, buttons: 2, button: 0 });
+  await pointer('pointerup', 310, 550, { pressure: 0, buttons: 0, button: 2 });
+  const afterChord = (await snapshot()).strokes;
+  expect(afterChord.filter(stroke => [first.id, second.id, third.id].includes(stroke.id))).toEqual(original);
+  expect(afterChord).toHaveLength(4);
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toEqual(original);
 });
 
 test('selection corner resizes preserve pressure, Shift keeps shape, and nudges undo cleanly', async () => {

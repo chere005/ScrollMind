@@ -14,6 +14,7 @@ let revision = 0, savedRevision = 0, saveTimer, savePromise, frame, baseDirty = 
 let pasteCount = 0, clipboardSource = '';
 let fileOperation = null;
 let clipboardQueue = Promise.resolve();
+const penButtons = new Map();
 const tones = {
   ivory: { background: '#faf8f2', line: '#c5c6bc', marker: '#71879a' },
   parchment: { background: '#eee0bf', line: '#b5a47d', marker: '#8a7759' },
@@ -173,6 +174,17 @@ function rectangle(a, b) { return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y)
 function corners(box, pad = 0) { return [{ x: box.x - pad, y: box.y - pad }, { x: box.x + box.width + pad, y: box.y - pad }, { x: box.x + box.width + pad, y: box.y + box.height + pad }, { x: box.x - pad, y: box.y + box.height + pad }]; }
 function inside(point, box, pad = 0) { return point.x >= box.x - pad && point.x <= box.x + box.width + pad && point.y >= box.y - pad && point.y <= box.y + box.height + pad; }
 function contact(event) { return event.pointerType !== 'pen' || event.pressure > 0; }
+function penInput(event) {
+  if (event.pointerType !== 'pen') return null;
+  const known = penButtons.has(event.pointerId);
+  const previous = penButtons.get(event.pointerId) ?? 0;
+  const buttons = event.buttons;
+  penButtons.set(event.pointerId, buttons);
+  return { tipDown: Boolean(buttons & 1), tipStarted: Boolean((buttons & 1) && !(previous & 1) && (known || event.type === 'pointerdown')) };
+}
+function barrelDelete(event) {
+  return event.pointerType === 'pen' && Boolean(event.buttons & 2) && !(event.buttons & 32) && event.button !== 5;
+}
 function eventTool(event) {
   if (spaceDown || (event.buttons & 4)) return 'hand';
   if (event.pointerType === 'pen' && ((event.buttons & 34) || event.button === 5)) return 'eraser';
@@ -190,15 +202,17 @@ function eraseAt(point) {
   const hits = scroll.query({ x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 }).filter(stroke => strokeHitsPoint(stroke, point, radius));
   if (hits.length && scroll.remove(hits.map(stroke => stroke.id))) { active.changed = true; requestRender(); }
 }
-function pointerDown(event) {
+function pointerDown(event, pen = penInput(event)) {
   if (!loaded || loadError || fileOperation || event.pointerType === 'touch' || active) return;
   $('#context-menu').hidden = true;
   if (event.button === 2 && event.pointerType !== 'pen') return;
-  const currentTool = eventTool(event); if (currentTool !== 'hand' && !contact(event)) return;
+  const currentTool = eventTool(event);
+  const tapDelete = currentTool === 'eraser' && barrelDelete(event);
+  if (tapDelete ? !pen.tipStarted : currentTool !== 'hand' && !contact(event)) return;
   event.preventDefault(); overlay.focus({ preventScroll: true }); capture(event);
   const point = world(event);
   if (currentTool === 'hand') active = { kind: 'pan', pointerId: event.pointerId, initialY: event.clientY, initialOffset: offsetY, temporary: tool !== 'hand' };
-  else if (currentTool === 'eraser') { scroll.beginGroup(); active = { kind: 'erase', pointerId: event.pointerId, changed: false, previous: point }; eraseAt(point); }
+  else if (currentTool === 'eraser') { scroll.beginGroup(); active = { kind: tapDelete ? 'tap-erase' : 'erase', pointerId: event.pointerId, changed: false, previous: point }; eraseAt(point); }
   else if (currentTool === 'select') {
     const box = boundsOf(selectedStrokes());
     const corner = box ? corners(box, 7).findIndex(p => Math.hypot(p.x - point.x, p.y - point.y) <= 9) : -1;
@@ -210,13 +224,18 @@ function pointerDown(event) {
   updateCursor(); requestRender();
 }
 function pointerMove(event) {
-  if (!active) { if (event.pointerType === 'pen' && event.buttons && contact(event)) pointerDown(event); return; }
+  const pen = penInput(event);
+  if (!active) {
+    if (event.pointerType === 'pen' && event.buttons && (barrelDelete(event) ? pen.tipStarted : contact(event))) pointerDown(event, pen);
+    return;
+  }
   if (event.pointerId !== active.pointerId) return;
   event.preventDefault(); const currentTool = eventTool(event);
-  if (active.kind === 'pan' && active.temporary && currentTool !== 'hand') { finishGesture(); if (contact(event) && event.buttons) pointerDown(event); return; }
+  if (active.kind === 'tap-erase') { if (!pen?.tipDown) finishGesture(); return; }
+  if (active.kind === 'pan' && active.temporary && currentTool !== 'hand') { finishGesture(); if (contact(event) && event.buttons) pointerDown(event, pen); return; }
   if (event.pointerType === 'pen' && ['ink', 'erase'].includes(active.kind)) {
-    const expected = currentTool === 'eraser' ? 'erase' : currentTool === 'hand' ? 'pan' : 'ink';
-    if (expected !== active.kind) { finishGesture(); if (contact(event) || expected === 'pan') pointerDown(event); return; }
+    const expected = currentTool === 'eraser' ? barrelDelete(event) ? 'tap-erase' : 'erase' : currentTool === 'hand' ? 'pan' : 'ink';
+    if (expected !== active.kind) { finishGesture(); if (contact(event) || expected === 'pan' || pen?.tipStarted) pointerDown(event, pen); return; }
     if (!contact(event)) { finishGesture(); return; }
   }
   if (active.kind === 'ink') { const samples = event.getCoalescedEvents?.() || []; for (const sample of samples.length ? samples : [event]) if (contact(sample)) appendPoint(sample); }
@@ -239,7 +258,7 @@ function finishGesture(cancel = false) {
   if (!active) return;
   const gesture = active; active = null; let modified = false;
   if (gesture.kind === 'ink' && gesture.points.length) modified = scroll.add([makeStroke(gesture.points, gesture.color, gesture.width)]);
-  else if (gesture.kind === 'erase') { scroll.endGroup(); modified = gesture.changed; }
+  else if (gesture.kind === 'erase' || gesture.kind === 'tap-erase') { scroll.endGroup(); modified = gesture.changed; }
   else if (!cancel && gesture.kind === 'move' && (Math.abs(gesture.dx) > .1 || Math.abs(gesture.dy) > .1)) modified = scroll.move([...selection], gesture.dx, gesture.dy);
   else if (!cancel && gesture.kind === 'resize') modified = scroll.transform([...selection], gesture.transform);
   else if (!cancel && gesture.kind === 'marquee') {
@@ -251,13 +270,15 @@ function finishGesture(cancel = false) {
   if (modified) changed(); updateControls(); requestRender();
 }
 overlay.addEventListener('pointerdown', pointerDown); overlay.addEventListener('pointermove', pointerMove);
-overlay.addEventListener('pointerup', event => { if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); finishGesture(); } });
-overlay.addEventListener('pointercancel', () => finishGesture(true)); overlay.addEventListener('lostpointercapture', () => finishGesture(true));
+overlay.addEventListener('pointerup', event => { penInput(event); if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); finishGesture(); } });
+overlay.addEventListener('pointercancel', event => { penButtons.delete(event.pointerId); finishGesture(true); });
+overlay.addEventListener('lostpointercapture', () => finishGesture(true));
+overlay.addEventListener('pointerleave', event => { if (!active && event.buttons === 0) penButtons.delete(event.pointerId); });
 overlay.addEventListener('wheel', event => {
   event.preventDefault(); if (active || fileOperation || !loaded || loadError) return;
   const multiplier = event.deltaMode === 1 ? 24 : event.deltaMode === 2 ? height : 1; setOffset(offsetY + event.deltaY * multiplier);
 }, { passive: false });
-window.addEventListener('blur', () => { finishGesture(); spaceDown = false; updateCursor(); }); window.addEventListener('resize', resize);
+window.addEventListener('blur', () => { finishGesture(); penButtons.clear(); spaceDown = false; updateCursor(); }); window.addEventListener('resize', resize);
 
 async function copySelection(cut = false) {
   finishGesture(); const strokes = selectedStrokes(); if (!strokes.length) return;
