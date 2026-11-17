@@ -4,11 +4,13 @@ A quiet, infinite sheet for a pen display. The macOS app opens full screen on a 
 
 Select **Rectangle** or press **V** to select handwriting. Drag the selected writing to move it. Standard copy, cut, paste, duplicate, undo, redo, and arrow-key nudging work with the mouse and keyboard.
 
-An optional sidebar holds paper settings, navigation, and file controls. Choose plain, dotted, ruled, or square-grid paper in white, ivory, parchment, or dark tones. Add named sections, page breaks, and markers to organize the continuous scroll and jump between places. The sidebar starts hidden so the page stays clear.
+An optional sidebar holds open scrolls, paper settings, navigation, and file controls. Create, name, switch, and close scrolls there; recently closed scrolls can be reopened. Each scroll keeps its own writing and undo history while open. Choose plain, dotted, ruled, or square-grid paper in white, ivory, parchment, or dark tones. Add named sections, page breaks, and markers to organize the continuous scroll and jump between places. The sidebar starts hidden so the page stays clear.
 
-ScrollMind saves your current scroll automatically in `~/Documents/ScrollMind/scroll.sm`, with a recovery snapshot beside it as `scroll.backup.sm`, refreshed at startup, first writing, every five minutes, and clean close. The `.sm` format is a self-contained SQLite file that preserves editable handwriting, pressure, colors, paper, sections, and markers. Writing stays on this computer. Earlier JSON saves migrate automatically, and the original files are preserved.
+ScrollMind saves automatically in `~/Documents/ScrollMind`: the original scroll is `scroll.sm`, and additional scrolls live in `Scrolls/<id>/scroll.sm`. Each has a recovery snapshot named `scroll.backup.sm`, refreshed at startup, first writing, every five minutes, and clean close. The workspace restores your open scrolls and active place after restart. The `.sm` format is a self-contained SQLite file that preserves editable handwriting, pressure, colors, paper, sections, and markers. Writing stays on this computer. Earlier JSON saves migrate automatically, and the original files are preserved.
 
-Use **Export Scroll** in the sidebar or File menu to save an editable `.sm` copy, a vector `.svg`, or a paginated `.pdf`. PDF exports honor page breaks. **Open Scroll** imports a working copy of a saved `.sm`, preserving the chosen file and first archiving any current writing in `Documents/ScrollMind/Saved Scrolls`.
+Use **Export Scroll** in the sidebar or File menu to save an editable `.sm` copy, a vector `.svg`, or a paginated `.pdf`. PDF exports honor page breaks. **Open Scroll** adds a working copy of a saved `.sm` to your open scrolls, preserving the chosen file and your other scrolls. **Clear Scroll** removes the current scroll's writing and navigation points in one undoable action, keeping its paper settings.
+
+Hold the lower pen button and tap a stroke to delete it. Double-click that button while hovering to undo; double-click the scrolling button to redo.
 
 See [controls](docs/CONTROLS.md) for keyboard and Wacom mappings. The drawing model is independent of Electron and macOS so a future Windows version can share the same ink, selection, and scroll format.
 

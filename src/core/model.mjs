@@ -448,6 +448,17 @@ export class Notebook {
       .map((id) => ({ id, before: this.#entries.get(id), after: undefined })));
   }
 
+  /** Clear ink and every marker as a single reversible edit. */
+  clear() {
+    if (!this.#entries.size && !this.#markers.size) return false;
+    this.beginGroup();
+    try {
+      this.remove([...this.#entries.keys()]);
+      for (const id of [...this.#markers.keys()]) this.removeMarker(id);
+    } finally { this.endGroup(); }
+    return true;
+  }
+
   move(ids, dx, dy) { return this.transform(ids, { dx, dy }); }
 
   transform(ids, { scaleX = 1, scaleY = 1, originX = 0, originY = 0, dx = 0, dy = 0 } = {}) {

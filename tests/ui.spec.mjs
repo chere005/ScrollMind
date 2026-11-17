@@ -46,6 +46,20 @@ async function snapshot() {
   return page.evaluate(() => window.scrollmindDebug.getSnapshot());
 }
 
+async function workspace() {
+  return page.evaluate(() => window.scrollmindDebug.getWorkspace());
+}
+
+async function showSidebar(show = true) {
+  if (await page.locator('#sidebar').isHidden() === show) await page.locator('#sidebar-toggle').click();
+}
+
+async function selectScroll(id) {
+  await showSidebar();
+  await page.locator(`.scroll-row[data-scroll-id="${id}"] .scroll-go`).click();
+  await expect.poll(async () => (await workspace()).activeId).toBe(id);
+}
+
 function readNativeScroll(file) {
   const database = new DatabaseSync(file, { readOnly: true });
   try {
@@ -371,14 +385,19 @@ test('exports independent editable SM, vector SVG and paginated PDF, then reopen
   await page.locator('#sidebar-toggle').click();
   await draw({ x: 800, y: 500 }, { x: 900, y: 540 });
   expect((await snapshot()).strokes).toHaveLength(3);
+  const originalScrollId = (await workspace()).activeId;
+  const originalBeforeOpen = await snapshot();
   await app.evaluate((_electron, path) => { process.env.SCROLLMIND_OPEN_PATH = path; }, nativeFile);
   await page.locator('#sidebar-toggle').click();
   await page.locator('#open-sm').click();
   await expect.poll(async () => (await snapshot()).strokes.length).toBe(2);
-  const archiveDirectory = resolve(dataDir, 'Saved Scrolls');
-  const archivedFiles = (await readdir(archiveDirectory)).filter(name => name.endsWith('.sm'));
-  expect(archivedFiles).toHaveLength(1);
-  expect(readNativeScroll(resolve(archiveDirectory, archivedFiles[0])).strokes).toHaveLength(3);
+  const importedScrollId = (await workspace()).activeId;
+  expect(importedScrollId).not.toBe(originalScrollId);
+  expect((await workspace()).scrolls.filter(scroll => scroll.open)).toHaveLength(2);
+  expect((await readdir(dataDir)).includes('Saved Scrolls')).toBe(false);
+  await selectScroll(originalScrollId);
+  expect((await snapshot()).strokes).toEqual(originalBeforeOpen.strokes);
+  await selectScroll(importedScrollId);
   expect(readNativeScroll(nativeFile).strokes).toEqual(expected.strokes);
   expect((await snapshot()).strokes).toEqual(expected.strokes);
   expect((await snapshot()).markers).toEqual(expected.markers);
@@ -392,11 +411,13 @@ test('exports independent editable SM, vector SVG and paginated PDF, then reopen
   expect(canceledExport.canceled).toBe(true);
   expect((await snapshot()).strokes).toEqual(expected.strokes);
 
-  await page.locator('#sidebar-toggle').click();
+  await showSidebar(false);
   await draw({ x: 750, y: 520 }, { x: 850, y: 560 });
   expect((await snapshot()).strokes).toHaveLength(3);
+  const activeFile = await page.evaluate(async () => (await window.scrollmind.getAppInfo()).dataPath);
   await closeGracefully();
-  expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toHaveLength(3);
+  expect(readNativeScroll(activeFile).strokes).toHaveLength(3);
+  expect(readNativeScroll(resolve(dataDir, 'scroll.sm')).strokes).toEqual(originalBeforeOpen.strokes);
 });
 
 test('legacy JSON migrates losslessly to SQLite while the original file is preserved', async () => {
@@ -426,4 +447,149 @@ test('legacy JSON migrates losslessly to SQLite while the original file is prese
   await closeGracefully();
   await launch();
   expect(await snapshot()).toEqual(legacy);
+});
+
+test('open scrolls preserve pending ink, independent undo, names, close/reopen and restart', async () => {
+  const firstId = (await workspace()).activeId;
+  await draw({ x: 380, y: 250 }, { x: 470, y: 280 });
+  const firstInk = (await snapshot()).strokes;
+  await showSidebar();
+  await page.locator('#new-scroll').click();
+  await expect.poll(async () => (await workspace()).activeId).not.toBe(firstId);
+  const secondId = (await workspace()).activeId;
+  const secondRow = page.locator(`.scroll-row[data-scroll-id="${secondId}"]`);
+  await secondRow.locator('.scroll-rename').click();
+  await secondRow.locator('.scroll-name').fill('Plans');
+  await secondRow.locator('.scroll-name').press('Enter');
+  await expect.poll(async () => (await workspace()).scrolls.find(scroll => scroll.id === secondId).name).toBe('Plans');
+  await showSidebar(false);
+  await draw({ x: 520, y: 300 }, { x: 640, y: 350 });
+  const secondInk = (await snapshot()).strokes;
+
+  await selectScroll(firstId);
+  // Leave a pen gesture unfinished; switching scrolls must commit its ink first.
+  await pointer('pointerdown', 520, 400, { pressure: 0.3 });
+  await pointer('pointermove', 620, 430, { pressure: 0.8 });
+  await selectScroll(secondId);
+  expect((await snapshot()).strokes).toEqual(secondInk);
+  await selectScroll(firstId);
+  await expect.poll(async () => (await snapshot()).strokes.length).toBe(2);
+  const firstWithPending = (await snapshot()).strokes;
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toEqual(firstInk);
+  await page.keyboard.press(`${modifier}+Shift+z`);
+  expect((await snapshot()).strokes).toEqual(firstWithPending);
+  await selectScroll(secondId);
+  await page.keyboard.press(`${modifier}+z`);
+  expect((await snapshot()).strokes).toHaveLength(0);
+  await page.keyboard.press(`${modifier}+Shift+z`);
+  expect((await snapshot()).strokes).toEqual(secondInk);
+
+  await page.locator(`.scroll-row[data-scroll-id="${secondId}"] .scroll-close`).click();
+  await expect.poll(async () => (await workspace()).activeId).toBe(firstId);
+  expect((await workspace()).scrolls.find(scroll => scroll.id === secondId).open).toBe(false);
+  await page.locator('#closed-scrolls > summary').click();
+  await page.locator(`.scroll-reopen[data-scroll-id="${secondId}"]`).click();
+  await expect.poll(async () => (await workspace()).activeId).toBe(secondId);
+  expect((await snapshot()).strokes).toEqual(secondInk);
+  await expect(page.locator(`.scroll-row[data-scroll-id="${secondId}"] .scroll-go`)).toHaveAttribute('aria-current', 'page');
+
+  await closeGracefully();
+  await launch();
+  expect((await workspace()).activeId).toBe(secondId);
+  expect((await workspace()).scrolls.filter(scroll => scroll.open)).toHaveLength(2);
+  expect((await workspace()).scrolls.find(scroll => scroll.id === secondId).name).toBe('Plans');
+  expect((await snapshot()).strokes).toEqual(secondInk);
+  await selectScroll(firstId);
+  expect((await snapshot()).strokes).toEqual(firstWithPending);
+});
+
+test('clear removes all current content in one undo action and leaves other scrolls and paper intact', async () => {
+  const firstId = (await workspace()).activeId;
+  await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+  const firstInk = (await snapshot()).strokes;
+  await showSidebar();
+  await page.locator('#new-scroll').click();
+  await expect.poll(async () => (await workspace()).activeId).not.toBe(firstId);
+  const secondId = (await workspace()).activeId;
+  await page.locator('#paper-tone').selectOption('parchment');
+  await page.locator('#paper-pattern').selectOption('grid');
+  await page.locator('#add-section').click();
+  await page.locator('#add-marker').click();
+  await page.locator('#add-page-break').click();
+  await showSidebar(false);
+  await draw({ x: 540, y: 320 }, { x: 650, y: 380 });
+  const beforeClear = await snapshot();
+  await showSidebar();
+  await page.locator('#clear-scroll').click();
+  await page.waitForFunction(() => !document.body.inert);
+  expect((await snapshot()).strokes).toEqual([]);
+  expect((await snapshot()).markers).toEqual([]);
+  expect((await snapshot()).settings).toEqual(beforeClear.settings);
+  await page.locator('#undo').click();
+  expect((await snapshot()).strokes).toEqual(beforeClear.strokes);
+  expect((await snapshot()).markers).toEqual(beforeClear.markers);
+  await page.locator('#redo').click();
+  expect((await snapshot()).strokes).toEqual([]);
+  expect((await snapshot()).markers).toEqual([]);
+  await selectScroll(firstId);
+  expect((await snapshot()).strokes).toEqual(firstInk);
+  await selectScroll(secondId);
+  await closeGracefully();
+  await launch();
+  expect((await workspace()).activeId).toBe(secondId);
+  expect((await snapshot()).strokes).toEqual([]);
+  expect((await snapshot()).markers).toEqual([]);
+  expect((await snapshot()).settings.paperTone).toBe('parchment');
+  expect((await snapshot()).settings.paper).toBe('grid');
+  await selectScroll(firstId);
+  expect((await snapshot()).strokes).toEqual(firstInk);
+});
+
+test('hover double-clicks on pen buttons undo and redo, while an actual pan does not redo', async () => {
+  await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+  const written = (await snapshot()).strokes;
+  const clickButton = async (buttons, button, x = 750, y = 400) => {
+    await pointer('pointerdown', x, y, { pressure: 0, buttons, button });
+    await pointer('pointerup', x, y, { pressure: 0, buttons: 0, button });
+  };
+  await clickButton(2, 2);
+  expect((await snapshot()).strokes).toEqual(written);
+  await clickButton(2, 2);
+  await expect.poll(async () => (await snapshot()).strokes.length).toBe(0);
+  await clickButton(4, 1);
+  expect((await snapshot()).strokes).toEqual([]);
+  await clickButton(4, 1);
+  await expect.poll(async () => (await snapshot()).strokes).toEqual(written);
+
+  await page.keyboard.press(`${modifier}+z`);
+  await pointer('pointerdown', 750, 500, { pressure: 0, buttons: 4, button: 1 });
+  await pointer('pointermove', 750, 420, { pressure: 0, buttons: 4, button: -1 });
+  await pointer('pointerup', 750, 420, { pressure: 0, buttons: 0, button: 1 });
+  await clickButton(4, 1, 750, 420);
+  expect((await snapshot()).strokes).toEqual([]);
+  expect(await page.evaluate(() => window.scrollmindDebug.getOffsetY())).toBe(80);
+  await page.keyboard.press(`${modifier}+Shift+z`);
+  expect((await snapshot()).strokes).toEqual(written);
+});
+
+test('opening several SM files together keeps each as a separate sidebar scroll', async () => {
+  const originalId = (await workspace()).activeId;
+  await draw({ x: 380, y: 250 }, { x: 490, y: 290 });
+  const written = (await snapshot()).strokes;
+  await showSidebar();
+  await page.locator('#export-sm').click();
+  const exported = await exportedPath('sm');
+  const first = resolve(dataDir, 'One.sm'), second = resolve(dataDir, 'Two.sm');
+  await copyFile(exported, first); await copyFile(exported, second);
+  await app.evaluate(({ app }, files) => {
+    for (const file of files) app.emit('open-file', { preventDefault() {} }, file);
+  }, [first, second]);
+  await expect.poll(async () => (await workspace()).scrolls.filter(scroll => scroll.open).length).toBe(3);
+  const state = await workspace();
+  expect(state.scrolls.map(scroll => scroll.name)).toEqual(['Scroll 1', 'One', 'Two']);
+  expect(state.scrolls.find(scroll => scroll.active).name).toBe('Two');
+  expect((await snapshot()).strokes).toEqual(written);
+  await selectScroll(originalId);
+  expect((await snapshot()).strokes).toEqual(written);
 });

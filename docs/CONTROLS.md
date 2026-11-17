@@ -16,12 +16,14 @@
 | Delete selection | Delete or Backspace |
 | Nudge selection | Arrow keys; Shift moves farther |
 | Undo, redo | ⌘Z, ⌘⇧Z |
+| Pen undo, redo | Double-click the lower pen button or scrolling button while hovering |
 | Scroll vertically | Mouse wheel or trackpad |
 | Pan vertically | Space + drag, or middle-button drag |
 | Return to starting point | ⌘0 |
 | Hide or show toolbar | Tab |
 | Full screen | ⌘⇧F or F11 |
 | Clear selection, then leave full screen | Escape |
+| Close current scroll | ⌘W |
 | Quit | ⌘Q |
 
 The selection tool uses a rectangle by default. A rectangle that crosses a stroke selects the whole stroke. Moving and copying preserve pressure and stroke shape. Each complete pen stroke, erase gesture, or selection move can be undone.
@@ -34,7 +36,7 @@ Use **Section**, **Marker**, or **Page break** to add a navigation point at the 
 
 ## Wacom buttons
 
-The app responds to standard mouse-button actions from the pen driver. A useful app-specific Wacom profile assigns the lower pen button to **Right Click**: hold the button, then tap the pen tip on a stroke to delete it. The button alone does nothing, and dragging after a tap does not erase more writing. Lift the tip and tap again to delete another stroke; pressing the button during an existing pen stroke does not delete writing. Assign the upper pen button to **Middle Click** for vertical panning. The toolbar eraser and a pen's rear eraser erase continuously while in contact with the page.
+The app responds to standard mouse-button actions from the pen driver. A useful app-specific Wacom profile assigns the lower pen button to **Right Click**: hold the button, then tap the pen tip on a stroke to delete it. A single button click does nothing, and dragging after a tap does not erase more writing. Lift the tip and tap again to delete another stroke; pressing the button during an existing pen stroke does not delete writing. Double-click the lower button while hovering to undo. Assign the upper pen button to **Middle Click** for vertical panning; double-click it while hovering to redo. Deleting by tip taps and dragging to scroll do not count as double-click commands. The toolbar eraser and a pen's rear eraser erase continuously while in contact with the page.
 
 For tablets with ExpressKeys, useful assignments are **⌘Z**, **⌘⇧Z**, **B**, **E**, **V**, **H**, and **Tab**. A touch strip or ring assigned to vertical scrolling moves along the sheet. ScrollMind handles these events; it does not modify the Wacom driver's button assignments.
 
@@ -42,7 +44,11 @@ For tablets with ExpressKeys, useful assignments are **⌘Z**, **⌘⇧Z**, **B*
 
 ScrollMind prefers a display with Wacom or Cintiq in its name. Other screens can be selected from its display control. When macOS mirrors screens, they show the same app; independent positioning requires an extended desktop.
 
-The current scroll is `~/Documents/ScrollMind/scroll.sm`; its recovery snapshot is `scroll.backup.sm` in the same folder, refreshed at startup, first writing, every five minutes, and clean close. These are self-contained SQLite files. The app saves changes automatically and waits for the final save before quitting. A recovery error appears if neither saved file can be read; damaged files are preserved. Earlier JSON saves migrate automatically, preserving the original JSON files.
+The sidebar lists your open scrolls. **New Scroll** creates another; select a scroll to switch, rename it with its pencil button, or close it with ×. Closed scrolls remain saved and can be reopened from **Other scrolls**. Each open scroll keeps its own undo history during the session. The app restores the workspace and active scroll after restarting.
+
+**Clear Scroll** removes every stroke, section, marker, and page break from the current scroll in one action. Undo restores all of them together. Paper settings and other open scrolls stay as they were.
+
+The original scroll is `~/Documents/ScrollMind/scroll.sm`; additional scrolls live in `Scrolls/<id>/scroll.sm` under that folder. Each has a recovery snapshot named `scroll.backup.sm`, refreshed at startup, first writing, every five minutes, and clean close. These are self-contained SQLite files. The app saves changes automatically and waits for the final save before quitting. A recovery error appears if neither saved file can be read; damaged files are preserved. Earlier JSON saves migrate automatically, preserving the original JSON files.
 
 ## Open and export
 
@@ -54,4 +60,4 @@ Open the sidebar or File menu to save a copy or open another scroll.
 | `.svg` | Vector artwork for the continuous scroll, without app controls |
 | `.pdf` | Paginated document for sharing or printing, with manual page breaks respected |
 
-**Export Scroll** writes a copy in the selected format. **Open Scroll** imports an editable working copy of a `.sm` file, preserving the chosen file and first archiving any current writing in `Documents/ScrollMind/Saved Scrolls`. Canceling either file dialog keeps the current scroll unchanged.
+**Export Scroll** writes a copy in the selected format. **Open Scroll** adds an editable working copy of a `.sm` file to the open scrolls, preserving the chosen file and every existing scroll. Canceling either file dialog keeps the workspace unchanged.

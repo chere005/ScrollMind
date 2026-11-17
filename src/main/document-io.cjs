@@ -85,6 +85,7 @@ function createDocumentIO({ getStore, getWindow, dataDirectory, testing }) {
       const file = await destination(format);
       if (!file) return { canceled: true };
       const store = getStore();
+      if (store.assertExportDestination) await store.assertExportDestination(file);
       await store.flush();
       if (format === 'sm') await store.exportFile(file);
       else {
@@ -111,17 +112,8 @@ function createDocumentIO({ getStore, getWindow, dataDirectory, testing }) {
       }
       if (!file || file === '__cancel__') return { canceled: true };
       const store = getStore();
-      // Validate the selected file before touching the working scroll.
-      const document = await store.importFile(file);
-      const current = await store.getSnapshot();
-      if (current && (current.strokes.length || current.markers?.length)) {
-        const saved = path.join(dataDirectory, 'Saved Scrolls');
-        await fs.mkdir(saved, { recursive: true });
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        await store.exportFile(path.join(saved, `Scroll ${stamp}-${crypto.randomUUID().slice(0, 8)}.sm`));
-      }
-      await store.save(document);
-      return { canceled: false, document };
+      const { document, workspace } = await store.openScroll(file);
+      return { canceled: false, document, workspace };
     });
   }
 

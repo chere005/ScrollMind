@@ -3,7 +3,7 @@
 const { app, BrowserWindow, Menu, ipcMain, screen, clipboard, shell, dialog, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { createStore } = require('./storage.cjs');
+const { createWorkspace } = require('./workspace.cjs');
 const { createDocumentIO } = require('./document-io.cjs');
 
 app.setName('ScrollMind');
@@ -16,7 +16,7 @@ app.setAppLogsPath(path.join(dataDirectory, 'Logs'));
 let window;
 let store;
 let documents;
-let pendingOpenPath = null;
+const pendingOpenPaths = [];
 let closing = false;
 let allowClose = false;
 let testClipboard = '';
@@ -65,18 +65,20 @@ function createMenu() {
       { label: 'Quit ScrollMind', accelerator: 'Cmd+Q', click: requestClose },
     ] }] : []),
     { label: 'File', submenu: [
+      action('New Scroll', 'new-scroll'),
       action('Open Scroll…', 'open-sm'),
       { label: 'Export Scroll', submenu: [action('ScrollMind (.sm)…', 'export-sm'), action('SVG (.svg)…', 'export-svg'), action('PDF (.pdf)…', 'export-pdf')] },
       { type: 'separator' },
       { label: 'Open Writing Folder', click: async () => { await fs.mkdir(dataDirectory, { recursive: true }); await shell.openPath(dataDirectory); } },
       { type: 'separator' },
-      { label: 'Close', accelerator: 'CmdOrCtrl+W', click: requestClose },
+      action('Close Scroll', 'close-scroll', { accelerator: 'CmdOrCtrl+W' }),
       ...(process.platform !== 'darwin' ? [{ label: 'Quit', accelerator: 'Alt+F4', click: requestClose }] : []),
     ] },
     { label: 'Edit', submenu: [
       action('Undo', 'undo'), action('Redo', 'redo'), { type: 'separator' },
       action('Cut', 'cut'), action('Copy', 'copy'), action('Paste', 'paste'),
       action('Select All', 'select-all'), action('Delete Selection', 'delete'),
+      { type: 'separator' }, action('Clear Current Scroll', 'clear-scroll'),
     ] },
     { label: 'View', submenu: [
       action('Pen', 'tool-pen'), action('Eraser', 'tool-eraser'),
@@ -103,11 +105,18 @@ function installHandlers() {
   }
   handle('notebook:load', () => store.load());
   handle('notebook:save', (document) => store.save(document));
-  handle('scroll:save-changes', (changes) => store.saveChanges(changes));
+  handle('scroll:save-changes', (changes) => {
+    if (changes.scrollId && changes.scrollId !== store.workspaceState().activeId) throw new Error('The active scroll changed before saving.');
+    return store.saveChanges(changes);
+  });
+  handle('workspace:state', () => store.workspaceState());
+  handle('workspace:new', (options) => store.newScroll(options));
+  handle('workspace:select', (id) => store.selectScroll(id));
+  handle('workspace:close', (id) => store.closeScroll(id));
+  handle('workspace:rename', (id, name) => store.renameScroll(id, name));
   handle('scroll:export', (format, options) => documents.exportDocument(format, options));
   handle('scroll:open', () => {
-    const file = pendingOpenPath;
-    pendingOpenPath = null;
+    const file = pendingOpenPaths.shift();
     return documents.openDocument(file);
   });
   handle('clipboard:read', () => testing ? testClipboard : clipboard.readText());
@@ -153,7 +162,7 @@ function installHandlers() {
 
 async function createWindow() {
   const { validateSnapshot } = await import('../core/model.mjs');
-  store = createStore(dataDirectory, { validate: validateSnapshot });
+  store = createWorkspace(dataDirectory, { validate: validateSnapshot });
   documents = createDocumentIO({ getStore: () => store, getWindow: () => window, dataDirectory, testing });
   const display = preferredDisplay();
   window = new BrowserWindow({
@@ -180,7 +189,7 @@ async function createWindow() {
   window.webContents.on('did-finish-load', () => {
     rendererReady = true;
     if (pendingClose) { pendingClose = false; setImmediate(requestClose); }
-    if (pendingOpenPath) setImmediate(() => send('open-sm'));
+    for (let index = 0; index < pendingOpenPaths.length; index++) setImmediate(() => send('open-sm'));
   });
   window.webContents.on('render-process-gone', async (_event, details) => {
     if (allowClose || !window || window.isDestroyed()) return;
@@ -216,14 +225,14 @@ async function createWindow() {
 const ownsInstance = testing || app.requestSingleInstanceLock();
 app.on('open-file', (event, file) => {
   event.preventDefault();
-  pendingOpenPath = file;
+  pendingOpenPaths.push(file);
   if (rendererReady) send('open-sm');
 });
 if (!ownsInstance) app.quit();
 else {
   app.on('second-instance', (_event, argv) => {
     const file = argv.find(value => value.toLowerCase().endsWith('.sm'));
-    if (file) { pendingOpenPath = file; if (rendererReady) send('open-sm'); }
+    if (file) { pendingOpenPaths.push(file); if (rendererReady) send('open-sm'); }
     if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
   });
   app.on('before-quit', (event) => { if (window && !allowClose) { event.preventDefault(); requestClose(); } });

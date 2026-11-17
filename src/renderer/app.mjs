@@ -1,4 +1,5 @@
 import { Notebook as Scroll, boundsOf, makeStroke, strokeHitsPoint, strokeIntersectsRect, validateStrokes } from '../core/model.mjs';
+import { PenButtonShortcuts } from '../core/pen-shortcuts.mjs';
 
 const $ = selector => document.querySelector(selector);
 const bridge = window.scrollmind;
@@ -14,7 +15,11 @@ let revision = 0, savedRevision = 0, saveTimer, savePromise, frame, baseDirty = 
 let pasteCount = 0, clipboardSource = '';
 let fileOperation = null;
 let clipboardQueue = Promise.resolve();
+let nativeFileQueue = Promise.resolve();
 const penButtons = new Map();
+const penShortcuts = new PenButtonShortcuts();
+let workspace = { activeId: null, scrolls: [] };
+const scrollSessions = new Map();
 const tones = {
   ivory: { background: '#faf8f2', line: '#c5c6bc', marker: '#71879a' },
   parchment: { background: '#eee0bf', line: '#b5a47d', marker: '#8a7759' },
@@ -42,7 +47,7 @@ async function flushSave() {
     while (savedRevision < revision) {
       const writingRevision = revision;
       const { token, ...changes } = scroll.pendingChanges();
-      await bridge.saveChanges({ ...changes, view: { offsetY }, settings });
+      await bridge.saveChanges({ ...changes, view: { offsetY }, settings, scrollId: workspace.activeId });
       scroll.acknowledgeChanges(token);
       savedRevision = writingRevision;
     }
@@ -185,6 +190,11 @@ function penInput(event) {
 function barrelDelete(event) {
   return event.pointerType === 'pen' && Boolean(event.buttons & 2) && !(event.buttons & 32) && event.button !== 5;
 }
+function penShortcut(event) {
+  const action = penShortcuts.update(event);
+  if (!action) return false;
+  finishGesture(); safely(action); return true;
+}
 function eventTool(event) {
   if (spaceDown || (event.buttons & 4)) return 'hand';
   if (event.pointerType === 'pen' && ((event.buttons & 34) || event.button === 5)) return 'eraser';
@@ -203,7 +213,9 @@ function eraseAt(point) {
   if (hits.length && scroll.remove(hits.map(stroke => stroke.id))) { active.changed = true; requestRender(); }
 }
 function pointerDown(event, pen = penInput(event)) {
-  if (!loaded || loadError || fileOperation || event.pointerType === 'touch' || active) return;
+  if (!loaded || loadError || fileOperation || event.pointerType === 'touch') return;
+  if (event.type === 'pointerdown' && penShortcut(event)) return;
+  if (active) return;
   $('#context-menu').hidden = true;
   if (event.button === 2 && event.pointerType !== 'pen') return;
   const currentTool = eventTool(event);
@@ -225,6 +237,7 @@ function pointerDown(event, pen = penInput(event)) {
 }
 function pointerMove(event) {
   const pen = penInput(event);
+  if (loaded && !loadError && !fileOperation && penShortcut(event)) return;
   if (!active) {
     if (event.pointerType === 'pen' && event.buttons && (barrelDelete(event) ? pen.tipStarted : contact(event))) pointerDown(event, pen);
     return;
@@ -270,15 +283,15 @@ function finishGesture(cancel = false) {
   if (modified) changed(); updateControls(); requestRender();
 }
 overlay.addEventListener('pointerdown', pointerDown); overlay.addEventListener('pointermove', pointerMove);
-overlay.addEventListener('pointerup', event => { penInput(event); if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); finishGesture(); } });
-overlay.addEventListener('pointercancel', event => { penButtons.delete(event.pointerId); finishGesture(true); });
+overlay.addEventListener('pointerup', event => { penInput(event); if (loaded && !loadError && !fileOperation && penShortcut(event)) return; if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); finishGesture(); } });
+overlay.addEventListener('pointercancel', event => { penButtons.delete(event.pointerId); penShortcuts.reset(); finishGesture(true); });
 overlay.addEventListener('lostpointercapture', () => finishGesture(true));
 overlay.addEventListener('pointerleave', event => { if (!active && event.buttons === 0) penButtons.delete(event.pointerId); });
 overlay.addEventListener('wheel', event => {
   event.preventDefault(); if (active || fileOperation || !loaded || loadError) return;
   const multiplier = event.deltaMode === 1 ? 24 : event.deltaMode === 2 ? height : 1; setOffset(offsetY + event.deltaY * multiplier);
 }, { passive: false });
-window.addEventListener('blur', () => { finishGesture(); penButtons.clear(); spaceDown = false; updateCursor(); }); window.addEventListener('resize', resize);
+window.addEventListener('blur', () => { finishGesture(); penButtons.clear(); penShortcuts.reset(); spaceDown = false; updateCursor(); }); window.addEventListener('resize', resize);
 
 async function copySelection(cut = false) {
   finishGesture(); const strokes = selectedStrokes(); if (!strokes.length) return;
@@ -304,9 +317,9 @@ function duplicateSelection() {
   finishGesture(); const copies = selectedStrokes().map(stroke => ({ ...stroke, id: crypto.randomUUID(), points: stroke.points.map(point => ({ ...point, x: point.x + 24, y: point.y + 24 })) }));
   if (copies.length) { scroll.add(copies); selection = new Set(copies.map(stroke => stroke.id)); changed(); }
 }
-async function command(value) {
+async function command(value, detail) {
   if (!loaded || loadError || fileOperation) return;
-  if (value === 'open-sm' || value.startsWith('export-')) return scrollFileCommand(value);
+  if (['open-sm', 'new-scroll', 'select-scroll', 'close-scroll', 'rename-scroll', 'clear-scroll'].includes(value) || value.startsWith('export-')) return scrollFileCommand(value, detail);
   if (value.startsWith('tool-')) return setTool(value.slice(5));
   if (value === 'undo' || value === 'redo') { finishGesture(); if (scroll[value]()) { changed(); renderMarkers(); } }
   else if (['copy', 'cut', 'paste'].includes(value)) {
@@ -321,24 +334,61 @@ async function command(value) {
   else if (value === 'toggle-toolbar') $('#toolbar').hidden = !$('#toolbar').hidden;
   else if (value === 'toggle-sidebar') toggleSidebar(); else if (value.startsWith('add-')) addMarker(value.slice(4));
 }
-async function scrollFileCommand(value) {
+function cacheScrollSession() {
+  if (workspace.activeId) scrollSessions.set(workspace.activeId, { scroll, settings: { ...settings }, offsetY, tool, selection: new Set(selection) });
+}
+function activateScroll(result) {
+  const id = result.workspace.activeId;
+  const cached = scrollSessions.get(id);
+  workspace = result.workspace;
+  if (cached) {
+    scroll = cached.scroll; settings = { ...cached.settings }; offsetY = cached.offsetY; tool = cached.tool; selection = new Set(cached.selection);
+  } else {
+    const document = result.document;
+    scroll = new Scroll(document || {});
+    const defaults = scroll.snapshot().settings;
+    settings = { ...defaults, ...document?.settings };
+    offsetY = document?.view.offsetY ?? 0;
+    selection.clear();
+  }
+  active = null; spaceDown = false; penButtons.clear(); penShortcuts.reset();
+  revision = savedRevision = 0;
+  pasteCount = 0;
+  updateControls(); renderScrolls(); renderMarkers(); requestRender();
+}
+async function scrollFileCommand(value, detail) {
   if (fileOperation) return fileOperation;
+  if (value === 'select-scroll' && detail === workspace.activeId) return;
   finishGesture();
+  penButtons.clear(); penShortcuts.reset();
   document.body.inert = true;
   fileOperation = (async () => {
     await clipboardQueue;
     await flushSave();
+    cacheScrollSession();
     if (value === 'open-sm') {
       const result = await bridge.openDocument();
       if (result.canceled) return;
-      scroll = new Scroll(result.document);
-      settings = { ...result.document.settings };
-      offsetY = result.document.view.offsetY;
-      selection.clear(); active = null; spaceDown = false;
-      revision = savedRevision = 0;
-      clipboardSource = ''; pasteCount = 0;
+      activateScroll(result);
       message('Scroll opened · saved locally');
-      updateControls(); renderMarkers(); requestRender();
+    } else if (value === 'clear-scroll') {
+      if (scroll.clear()) {
+        selection.clear(); changed(); renderMarkers();
+        await flushSave();
+        message('Scroll cleared · Undo restores it');
+      }
+    } else if (value === 'new-scroll') {
+      activateScroll(await bridge.newScroll({ settings }));
+      message('New scroll · saved locally');
+    } else if (value === 'select-scroll') {
+      activateScroll(await bridge.selectScroll(detail));
+      message('Saved');
+    } else if (value === 'close-scroll') {
+      activateScroll(await bridge.closeScroll(detail || workspace.activeId));
+      message('Scroll closed · saved locally');
+    } else if (value === 'rename-scroll') {
+      const result = await bridge.renameScroll(detail.id, detail.name);
+      workspace = result.workspace; renderScrolls();
     } else {
       const format = value.slice(7);
       const result = await bridge.exportDocument(format, { width, height });
@@ -348,12 +398,12 @@ async function scrollFileCommand(value) {
   try { return await fileOperation; }
   finally { fileOperation = null; document.body.inert = false; overlay.focus({ preventScroll: true }); }
 }
-function safely(value) { Promise.resolve(command(value)).catch(error => message(error.message, true)); }
+function safely(value, detail) { Promise.resolve(command(value, detail)).catch(error => message(error.message, true)); }
 document.querySelectorAll('[data-tool]').forEach(button => button.addEventListener('click', () => setTool(button.dataset.tool)));
 document.querySelectorAll('[data-color]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.color = button.dataset.color; setTool('pen'); changed(); }));
 document.querySelectorAll('[data-width]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.width = Number(button.dataset.width); changed(); }));
 for (const name of ['undo', 'redo', 'home', 'fullscreen']) $(`#${name}`).addEventListener('click', () => safely(name));
-for (const name of ['open-sm', 'export-sm', 'export-svg', 'export-pdf']) $(`#${name}`).addEventListener('click', () => safely(name));
+for (const name of ['open-sm', 'new-scroll', 'clear-scroll', 'export-sm', 'export-svg', 'export-pdf']) $(`#${name}`).addEventListener('click', () => safely(name));
 $('#controls-link').addEventListener('click', () => safely('help')); $('#help-close').addEventListener('click', () => $('#help').close());
 $('#context-menu').addEventListener('click', event => { const button = event.target.closest('[data-command]'); if (button) { safely(button.dataset.command); $('#context-menu').hidden = true; } });
 overlay.addEventListener('contextmenu', event => {
@@ -373,6 +423,7 @@ document.addEventListener('keydown', event => {
     else if (key === '0') action = 'home'; else if (key === '/') action = 'toggle-sidebar'; else if (key === 'f' && event.shiftKey) action = 'fullscreen';
     else if (key === 'm' && event.shiftKey) action = 'add-marker'; else if (key === 'enter') action = 'add-page-break';
     else if (key === 'o') action = 'open-sm';
+    else if (key === 'n') action = 'new-scroll';
     else if (key === 'p') action = 'export-pdf';
     else if (key === 's' && event.shiftKey) action = 'export-sm';
     else if (key === 's') { event.preventDefault(); flushSave().catch(() => {}); return; }
@@ -417,10 +468,40 @@ function renderMarkers() {
     remove.addEventListener('click', () => { if (scroll.removeMarker(marker.id)) { changed(); renderMarkers(); } }); row.append(go, label, remove); list.append(row);
   }
 }
+function renderScrolls() {
+  const list = $('#scroll-list'), closedList = $('#closed-scroll-list');
+  list.replaceChildren(); closedList.replaceChildren();
+  for (const item of workspace.scrolls) {
+    if (!item.open) {
+      const reopen = document.createElement('button'); reopen.className = 'scroll-reopen'; reopen.dataset.scrollId = item.id; reopen.textContent = item.name;
+      reopen.addEventListener('click', () => safely('select-scroll', item.id)); closedList.append(reopen); continue;
+    }
+    const row = document.createElement('div'); row.className = 'scroll-row'; row.dataset.scrollId = item.id;
+    const go = document.createElement('button'); go.className = 'scroll-go'; go.textContent = item.name; go.title = `Switch to ${item.name}`;
+    if (item.id === workspace.activeId) go.setAttribute('aria-current', 'page');
+    go.addEventListener('click', () => safely('select-scroll', item.id));
+    const name = document.createElement('input'); name.className = 'scroll-name'; name.hidden = true; name.value = item.name; name.maxLength = 80; name.setAttribute('aria-label', 'Scroll name');
+    const rename = document.createElement('button'); rename.className = 'scroll-rename'; rename.textContent = '✎'; rename.title = `Rename ${item.name}`; rename.setAttribute('aria-label', `Rename ${item.name}`);
+    const editName = () => { name.hidden = false; go.hidden = true; name.focus(); name.select(); };
+    rename.addEventListener('click', editName); go.addEventListener('dblclick', editName);
+    name.addEventListener('change', () => { const text = name.value.trim() || item.name; safely('rename-scroll', { id: item.id, name: text }); });
+    name.addEventListener('blur', () => { name.hidden = true; go.hidden = false; });
+    name.addEventListener('keydown', event => { if (event.key === 'Enter') name.blur(); else if (event.key === 'Escape') { name.value = item.name; name.blur(); } });
+    const close = document.createElement('button'); close.className = 'scroll-close'; close.textContent = '×'; close.title = `Close ${item.name}`; close.setAttribute('aria-label', `Close ${item.name}`);
+    close.addEventListener('click', () => safely('close-scroll', item.id));
+    row.append(go, name, rename, close); list.append(row);
+  }
+  $('#closed-scrolls').hidden = !closedList.childElementCount;
+}
 $('#paper-tone').addEventListener('change', event => { finishGesture(); settings.paperTone = event.target.value; changed(); }); $('#paper-pattern').addEventListener('change', event => { finishGesture(); settings.paper = event.target.value; changed(); });
 $('#display-select').addEventListener('change', async event => { try { finishGesture(); await bridge.moveToDisplay(event.target.value); } catch (error) { message(error.message, true); } });
 $('#data-folder').addEventListener('click', () => bridge.openDataFolder().catch(error => message(error.message, true)));
-status.addEventListener('click', () => { if (status.classList.contains('error')) bridge.openDataFolder(); }); bridge.onCommand(value => initialization.then(() => safely(value)));
+status.addEventListener('click', () => { if (status.classList.contains('error')) bridge.openDataFolder(); });
+bridge.onCommand(value => {
+  if (value === 'open-sm') {
+    nativeFileQueue = nativeFileQueue.then(async () => { await initialization; await fileOperation?.catch(() => {}); return command(value); }).catch(error => message(error.message, true));
+  } else initialization.then(() => safely(value));
+});
 $('#save-alert').addEventListener('click', () => toggleSidebar(true));
 bridge.onBeforeClose(async () => { try { await initialization; await fileOperation?.catch(() => {}); await clipboardQueue; if (!loadError) { finishGesture(); await flushSave(); } await bridge.readyToClose(); } catch (error) { await bridge.readyToClose({ error: error.message }); } });
 window.addEventListener('pagehide', () => { finishGesture(); flushSave().catch(() => {}); }); window.addEventListener('error', event => message(event.message || 'Something needs attention', true));
@@ -429,11 +510,12 @@ async function initialize() {
     const [result, info, displays] = await Promise.all([bridge.load(), bridge.getAppInfo(), bridge.getDisplays()]);
     if (result.error && !result.document) throw new Error(result.error);
     if (result.document) { scroll = new Scroll(result.document); settings = { ...settings, ...result.document.settings }; offsetY = result.document.view.offsetY; }
+    workspace = result.workspace;
     $('#version').textContent = `ScrollMind ${info.version} · First draft`;
     for (const display of displays) { const option = document.createElement('option'); option.value = display.id; option.textContent = display.label; option.selected = display.selected; $('#display-select').append(option); }
     loaded = true;
-    if (info.testMode) window.scrollmindDebug = Object.freeze({ getSnapshot: snapshot, getSelection: () => [...selection], getOffsetY: () => offsetY, setOffsetY: value => setOffset(value) });
-    message(result.recovered ? 'Recovered from backup · saved locally' : 'Saved'); if (!result.document) changed(); updateControls(); renderMarkers(); resize();
+    if (info.testMode) window.scrollmindDebug = Object.freeze({ getSnapshot: snapshot, getSelection: () => [...selection], getOffsetY: () => offsetY, setOffsetY: value => setOffset(value), getWorkspace: () => workspace });
+    message(result.recovered ? 'Recovered from backup · saved locally' : 'Saved'); if (!result.document) changed(); updateControls(); renderScrolls(); renderMarkers(); resize();
   } catch (error) { loadError = error.message; message('Couldn’t open scroll · click to open folder', true); console.error(error); }
 }
 resize(); const initialization = initialize(); await initialization;

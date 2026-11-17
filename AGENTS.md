@@ -3,3 +3,4 @@
 - Keep scrolls in ~/Documents/ScrollMind; use incremental SQLite transactions and flush before closing.
 - Do not enable GitHub workflows until the same checks pass locally.
 - Use the suite’s connected initials icon; keep branding and secondary controls off the writing canvas.
+- Save scrolls separately and restore open tabs; clearing the current scroll must be undoable and leave others untouched.

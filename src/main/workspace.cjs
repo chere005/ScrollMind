@@ -1,0 +1,377 @@
+'use strict';
+
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { createStore } = require('./storage.cjs');
+
+const VERSION = 1;
+const MAX_SCROLLS = 1000;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+
+function validId(id) {
+  if (typeof id !== 'string' || (id !== 'main' && !UUID.test(id))) throw new TypeError('Choose a valid scroll.');
+  return id;
+}
+
+function validName(name) {
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 80 || /[\x00-\x1f\x7f]/.test(name)) {
+    throw new TypeError('A scroll name needs 1–80 characters without control characters.');
+  }
+  return name.trim();
+}
+
+function validateManifest(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The scroll workspace is unreadable.');
+  if (value.version !== VERSION) {
+    const error = new Error('This scroll workspace uses an unsupported version. Update ScrollMind before opening it.');
+    error.code = 'UNSUPPORTED_WORKSPACE';
+    throw error;
+  }
+  if (!Array.isArray(value.scrolls) || !value.scrolls.length || value.scrolls.length > MAX_SCROLLS) throw new Error('The scroll workspace has an invalid scroll list.');
+  const ids = new Set();
+  const scrolls = value.scrolls.map((scroll) => {
+    if (!scroll || typeof scroll !== 'object' || Array.isArray(scroll)) throw new Error('The scroll workspace has an invalid scroll.');
+    const id = validId(scroll.id);
+    if (ids.has(id)) throw new Error('The scroll workspace contains a duplicate scroll.');
+    ids.add(id);
+    if (typeof scroll.open !== 'boolean') throw new Error('The scroll workspace has an invalid open state.');
+    const descriptor = { id, name: validName(scroll.name), open: scroll.open };
+    if (scroll.sourcePath !== undefined) {
+      if (typeof scroll.sourcePath !== 'string' || scroll.sourcePath.length > 4096 || !path.isAbsolute(scroll.sourcePath) || scroll.sourcePath.includes('\0')) throw new Error('The scroll workspace has an invalid source file.');
+      descriptor.sourcePath = path.normalize(scroll.sourcePath);
+    }
+    return descriptor;
+  });
+  validId(value.activeId);
+  if (!ids.has('main') || !scrolls.some((scroll) => scroll.id === value.activeId && scroll.open)) throw new Error('The scroll workspace has no active scroll.');
+  return { version: VERSION, activeId: value.activeId, scrolls };
+}
+
+async function exists(file) {
+  try { await fs.stat(file); return true; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+
+async function atomicWrite(file, content) {
+  const temporary = path.join(path.dirname(file), `.${path.basename(file)}-${crypto.randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await fs.open(temporary, 'wx', 0o600);
+    await handle.writeFile(content, 'utf8');
+    await handle.sync();
+    await handle.close(); handle = null;
+    await fs.rename(temporary, file);
+    // Rename is the commit point. Report committed state even if directory sync
+    // is unavailable, so renderer state always matches the on-disk active ID.
+    let parent;
+    try { parent = await fs.open(path.dirname(file), 'r'); await parent.sync(); }
+    catch (error) { if (!['EINVAL', 'ENOTSUP', 'EISDIR', 'EPERM', 'EACCES'].includes(error.code)) console.warn(`ScrollMind workspace directory sync will be retried: ${error.message}`); }
+    finally { await parent?.close().catch(() => {}); }
+  } finally {
+    await handle?.close().catch(() => {});
+    await fs.unlink(temporary).catch(() => {});
+  }
+}
+
+async function readManifest(file) {
+  if ((await fs.stat(file)).size > 1024 * 1024) throw new Error('The scroll workspace is too large to read safely.');
+  return validateManifest(JSON.parse(await fs.readFile(file, 'utf8')));
+}
+
+async function resolvedDestination(file) {
+  const absolute = path.resolve(file);
+  try { return await fs.realpath(absolute); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const parent = path.dirname(absolute);
+    if (parent === absolute) return absolute;
+    return path.join(await resolvedDestination(parent), path.basename(absolute));
+  }
+}
+
+function createWorkspace(directory, options = {}) {
+  const manifestPath = path.join(directory, 'workspace.json');
+  const manifestBackupPath = path.join(directory, 'workspace.backup.json');
+  const scrollsDirectory = path.join(directory, 'Scrolls');
+  const stores = new Map();
+  let manifest;
+  let loaded = false;
+  let blocked = false;
+  let closed = false;
+  let queue = Promise.resolve();
+
+  function enqueue(operation) {
+    const pending = queue.then(operation);
+    queue = pending.catch(() => {});
+    return pending;
+  }
+
+  function requireWorkspace() {
+    if (!loaded) throw new Error('Open the scroll workspace first.');
+    if (blocked) throw new Error('The workspace is protected because its scroll list could not be read.');
+    if (closed) throw new Error('The scroll workspace has been closed.');
+  }
+
+  function descriptor(id) {
+    validId(id);
+    const found = manifest?.scrolls.find((scroll) => scroll.id === id);
+    if (!found) throw new Error('That scroll is not in this workspace.');
+    return found;
+  }
+
+  function storeDirectory(id) { return id === 'main' ? directory : path.join(scrollsDirectory, validId(id)); }
+
+  async function ensureStore(id) {
+    let entry = stores.get(id);
+    if (!entry) {
+      entry = { store: createStore(storeDirectory(id), options), loaded: false };
+      stores.set(id, entry);
+    }
+    let result;
+    if (!entry.loaded) {
+      result = await entry.store.load();
+      if (result.error) throw new Error(result.error);
+      entry.loaded = true;
+    }
+    return { store: entry.store, result };
+  }
+
+  async function activeStore() { requireWorkspace(); return (await ensureStore(manifest.activeId)).store; }
+
+  function workspaceState() {
+    if (!manifest) return { activeId: null, scrolls: [] };
+    return { activeId: manifest.activeId, scrolls: manifest.scrolls.map((scroll) => ({ id: scroll.id, name: scroll.name, open: scroll.open, active: scroll.id === manifest.activeId })) };
+  }
+
+  async function persist(next) {
+    const normalized = validateManifest(next);
+    const content = `${JSON.stringify(normalized, null, 2)}\n`;
+    if (Buffer.byteLength(content, 'utf8') > 1024 * 1024) throw new Error('The scroll workspace has reached its maximum size.');
+    await fs.mkdir(directory, { recursive: true });
+    let previous;
+    try { previous = await readManifest(manifestPath); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (previous) await atomicWrite(manifestBackupPath, `${JSON.stringify(previous, null, 2)}\n`);
+    else await atomicWrite(manifestBackupPath, content);
+    await atomicWrite(manifestPath, content);
+    manifest = normalized;
+  }
+
+  async function closeLoaded() {
+    const errors = [];
+    for (const entry of stores.values()) {
+      if (!entry.loaded) continue;
+      try { await entry.store.close(); entry.loaded = false; }
+      catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'Some scrolls could not finish saving. Keep ScrollMind open and try again.');
+  }
+
+  async function discoverScrolls(reader) {
+    let folders;
+    try {
+      if (!(await fs.lstat(scrollsDirectory)).isDirectory()) return false;
+      folders = await fs.readdir(scrollsDirectory, { withFileTypes: true });
+    } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    const known = new Set(manifest.scrolls.map((scroll) => scroll.id));
+    const names = new Set(manifest.scrolls.map((scroll) => scroll.name));
+    const next = structuredClone(manifest);
+    let number = 1;
+    for (const folder of folders.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!folder.isDirectory() || !UUID.test(folder.name) || known.has(folder.name) || next.scrolls.length >= MAX_SCROLLS) continue;
+      const file = path.join(scrollsDirectory, folder.name, 'scroll.sm');
+      try {
+        if (!(await fs.lstat(file)).isFile()) continue;
+        await reader.importFile(file);
+      } catch { continue; } // Preserve malformed/future files for manual recovery.
+      while (names.has(`Recovered scroll ${number}`)) number++;
+      const name = `Recovered scroll ${number++}`;
+      next.scrolls.push({ id: folder.name, name, open: true });
+      names.add(name);
+    }
+    if (next.scrolls.length === manifest.scrolls.length) return false;
+    await persist(next);
+    return true;
+  }
+
+  function load() {
+    return enqueue(async () => {
+      if (loaded && !closed) await closeLoaded();
+      stores.clear();
+      loaded = true; blocked = false; closed = false;
+      let recovered = false;
+      try {
+        try { manifest = await readManifest(manifestPath); }
+        catch (error) {
+          if (error.code === 'UNSUPPORTED_WORKSPACE') throw error;
+          try {
+            const restored = await readManifest(manifestBackupPath);
+            if (error.code !== 'ENOENT') await fs.rename(manifestPath, `${manifestPath}.corrupt-${Date.now()}-${crypto.randomUUID()}`);
+            await atomicWrite(manifestPath, `${JSON.stringify(restored, null, 2)}\n`);
+            manifest = restored; recovered = true;
+          } catch (backupError) {
+            if (error.code !== 'ENOENT' || backupError.code !== 'ENOENT') throw backupError;
+            manifest = { version: VERSION, activeId: 'main', scrolls: [{ id: 'main', name: 'Scroll 1', open: true }] };
+            await persist(manifest);
+          }
+        }
+        const { store, result } = await ensureStore(manifest.activeId);
+        recovered = await discoverScrolls(store) || recovered;
+        return { ...(result || { document: await store.getSnapshot(), recovered: false }), recovered: recovered || result?.recovered || false, workspace: workspaceState() };
+      } catch (error) {
+        blocked = true;
+        return { document: null, recovered: false, error: error.message, workspace: workspaceState() };
+      }
+    });
+  }
+
+  async function prepareNewScroll({ name, document, settings, sourcePath } = {}) {
+    if (manifest.scrolls.length >= MAX_SCROLLS) throw new Error('This workspace already contains the maximum number of scrolls.');
+    const id = crypto.randomUUID();
+    const nextDescriptor = { id, name: validName(name === undefined ? `Scroll ${manifest.scrolls.length + 1}` : name), open: true, ...(sourcePath ? { sourcePath } : {}) };
+    const { store } = await ensureStore(id);
+    if (document !== undefined) await store.save(document);
+    else if (settings !== undefined) await store.saveChanges({ settings, view: { offsetY: 0 } });
+    return { descriptor: nextDescriptor, document: await store.getSnapshot() };
+  }
+
+  async function selectInternal(id) {
+    requireWorkspace();
+    const selected = descriptor(id);
+    const { store } = await ensureStore(id);
+    const document = await store.getSnapshot();
+    if (manifest.activeId !== id || !selected.open) {
+      const next = structuredClone(manifest);
+      next.activeId = id;
+      next.scrolls.find((scroll) => scroll.id === id).open = true;
+      await persist(next);
+    }
+    return { document, workspace: workspaceState() };
+  }
+
+  function newScroll(options = {}) {
+    const copy = structuredClone(options);
+    return enqueue(async () => {
+      requireWorkspace();
+      if (!copy || typeof copy !== 'object' || Array.isArray(copy)) throw new TypeError('Choose valid new scroll options.');
+      const prepared = await prepareNewScroll(copy);
+      const next = structuredClone(manifest);
+      next.activeId = prepared.descriptor.id;
+      next.scrolls.push(prepared.descriptor);
+      await persist(next);
+      return { document: prepared.document, workspace: workspaceState() };
+    });
+  }
+
+  function selectScroll(id) { return enqueue(() => selectInternal(id)); }
+
+  function closeScroll(id) {
+    return enqueue(async () => {
+      requireWorkspace();
+      const closing = descriptor(id);
+      if (!closing.open) return { document: await (await activeStore()).getSnapshot(), workspace: workspaceState() };
+      const next = structuredClone(manifest);
+      next.scrolls.find((scroll) => scroll.id === id).open = false;
+      let document;
+      if (id === manifest.activeId) {
+        const nextOpen = next.scrolls.filter((scroll) => scroll.open);
+        if (nextOpen.length) {
+          next.activeId = nextOpen.at(-1).id;
+          document = await (await ensureStore(next.activeId)).store.getSnapshot();
+        } else {
+          const current = await (await activeStore()).getSnapshot();
+          const prepared = await prepareNewScroll({ settings: current.settings });
+          next.scrolls.push(prepared.descriptor);
+          next.activeId = prepared.descriptor.id;
+          document = prepared.document;
+        }
+      } else document = await (await activeStore()).getSnapshot();
+      await persist(next);
+      return { document, workspace: workspaceState() };
+    });
+  }
+
+  function renameScroll(id, name) {
+    return enqueue(async () => {
+      requireWorkspace(); descriptor(id);
+      const normalized = validName(name);
+      const document = await (await activeStore()).getSnapshot();
+      const next = structuredClone(manifest);
+      next.scrolls.find((scroll) => scroll.id === id).name = normalized;
+      await persist(next);
+      return { document, workspace: workspaceState() };
+    });
+  }
+
+  async function assertExportDestination(destination) {
+    requireWorkspace();
+    if (typeof destination !== 'string' || !destination) throw new TypeError('Choose an export file.');
+    const resolved = await resolvedDestination(destination);
+    const managed = await resolvedDestination(scrollsDirectory);
+    const relative = path.relative(managed.toLowerCase(), resolved.toLowerCase());
+    if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) throw new Error('Choose an export file outside the managed scroll folders.');
+    const protectedFiles = [manifestPath, manifestBackupPath, path.join(directory, 'notebook.scrollmind.json'), path.join(directory, 'notebook.backup.json')];
+    for (const id of new Set(['main', ...manifest.scrolls.map((scroll) => scroll.id), ...stores.keys()])) {
+      const base = path.join(storeDirectory(id), 'scroll.sm');
+      protectedFiles.push(base, path.join(storeDirectory(id), 'scroll.backup.sm'), `${base}-wal`, `${base}-shm`);
+    }
+    for (const protectedFile of protectedFiles) {
+      if (resolved.toLowerCase() === (await resolvedDestination(protectedFile)).toLowerCase()) throw new Error('Choose a different export file so your workspace scrolls stay safe.');
+      try {
+        const [target, protectedStat] = await Promise.all([fs.stat(resolved), fs.stat(protectedFile)]);
+        if (target.dev === protectedStat.dev && target.ino === protectedStat.ino) throw new Error('Choose a different export file so your workspace scrolls stay safe.');
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    return destination;
+  }
+
+  function openScroll(sourcePath) {
+    return enqueue(async () => {
+      requireWorkspace();
+      if (typeof sourcePath !== 'string' || !sourcePath) throw new TypeError('Choose a ScrollMind scroll to open.');
+      const source = await fs.realpath(sourcePath);
+      const known = manifest.scrolls.find((scroll) => (scroll.sourcePath && scroll.sourcePath.toLowerCase() === source.toLowerCase()) || path.resolve(storeDirectory(scroll.id), 'scroll.sm').toLowerCase() === source.toLowerCase());
+      if (known) return selectInternal(known.id);
+      const document = await (await activeStore()).importFile(source);
+      const importedName = path.basename(sourcePath, path.extname(sourcePath)).replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 80) || 'Imported scroll';
+      const prepared = await prepareNewScroll({ name: importedName, document, sourcePath: source });
+      const next = structuredClone(manifest);
+      next.activeId = prepared.descriptor.id;
+      next.scrolls.push(prepared.descriptor);
+      await persist(next);
+      return { document: prepared.document, workspace: workspaceState() };
+    });
+  }
+
+  function save(document) { const copy = structuredClone(document); return enqueue(async () => (await activeStore()).save(copy)); }
+  function saveChanges(changes) {
+    const copy = structuredClone(changes);
+    return enqueue(async () => {
+      requireWorkspace();
+      if (copy?.scrollId !== undefined && copy.scrollId !== manifest.activeId) throw new Error('This save belongs to a different scroll.');
+      return (await activeStore()).saveChanges(copy);
+    });
+  }
+  function getSnapshot() { return enqueue(async () => (await activeStore()).getSnapshot()); }
+  function importFile(file) { return enqueue(async () => (await activeStore()).importFile(file)); }
+  function exportFile(file) { return enqueue(async () => (await activeStore()).exportFile(await assertExportDestination(file))); }
+  function flush() {
+    return enqueue(async () => {
+      const errors = [];
+      for (const entry of stores.values()) if (entry.loaded) try { await entry.store.flush(); } catch (error) { errors.push(error); }
+      if (errors.length) throw new AggregateError(errors, 'Some scrolls could not finish saving.');
+    });
+  }
+  function close() { return enqueue(async () => { if (closed) return; await closeLoaded(); closed = true; }); }
+
+  return {
+    load, save, saveChanges, getSnapshot, importFile, exportFile, backup: exportFile,
+    flush, close, newScroll, selectScroll, closeScroll, renameScroll, openScroll, workspaceState,
+    assertExportDestination: file => enqueue(() => assertExportDestination(file)),
+    get filePath() { return path.join(storeDirectory(manifest?.activeId || 'main'), 'scroll.sm'); },
+    get backupPath() { return path.join(storeDirectory(manifest?.activeId || 'main'), 'scroll.backup.sm'); },
+  };
+}
+
+module.exports = { createWorkspace };

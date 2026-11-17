@@ -237,3 +237,76 @@ test('ordinary appends avoid resending scroll order; undoing an erase restores p
   scroll.undo();
   assert.deepEqual(scroll.pendingChanges().order, ['a', 'b', 'c', 'd']);
 });
+
+test('clear removes all ink and marker kinds in one undo without changing paper or view', () => {
+  const source = {
+    version: 1,
+    strokes: [stroke('bottom', [[10, 900, .2], [20, 920, .8]]), stroke('top', [[-50, -700, 1]])],
+    markers: [
+      { id: 'section', y: -700, label: 'Start', kind: 'section' },
+      { id: 'break', y: 0, label: 'Next page', kind: 'page-break' },
+      { id: 'bookmark', y: 800, label: 'Keep', kind: 'marker' },
+    ],
+    view: { offsetY: -900 },
+    settings: { paper: 'ruled', paperTone: 'parchment', color: '#215b9c', width: 4 },
+  };
+  const scroll = new Notebook(source);
+  const before = scroll.snapshot(source.view, source.settings);
+  assert.equal(scroll.clear(), true);
+  assert.deepEqual(scroll.strokes, []);
+  assert.deepEqual(scroll.markers, []);
+  const cleared = scroll.snapshot(source.view, source.settings);
+  assert.deepEqual(cleared.view, before.view);
+  assert.deepEqual(cleared.settings, before.settings);
+  assert.equal(scroll.undo(), true);
+  assert.deepEqual(scroll.snapshot(source.view, source.settings), before);
+  assert.equal(scroll.canUndo, false);
+  assert.equal(scroll.redo(), true);
+  assert.deepEqual(scroll.strokes, []);
+  assert.deepEqual(scroll.markers, []);
+});
+
+test('clear journals only removed stroke IDs and the empty marker list; undo restores exact data', () => {
+  const scroll = new Notebook({
+    version: 1,
+    strokes: [stroke('a', [[1, -2, .3], [5, 8, .9]]), stroke('b', [[3, 4, .1]])],
+    markers: [{ id: 'section', y: -20, label: 'Ideas', kind: 'section' }],
+  });
+  assert.equal(scroll.clear(), true);
+  const cleared = scroll.pendingChanges();
+  assert.deepEqual(cleared.upserts, []);
+  assert.deepEqual(cleared.removals, ['a', 'b']);
+  assert.deepEqual(cleared.markers, []);
+  assert.equal(cleared.order, undefined);
+  assert.equal(cleared.view, undefined);
+  assert.equal(cleared.settings, undefined);
+  scroll.undo();
+  // An earlier clear batch can be acknowledged after Undo without dropping the restoration.
+  scroll.acknowledgeChanges(cleared.token);
+  const restored = scroll.pendingChanges();
+  assert.deepEqual(restored.upserts.map(item => item.id), ['a', 'b']);
+  assert.deepEqual(restored.upserts[0].points, [{ x: 1, y: -2, p: .3 }, { x: 5, y: 8, p: .9 }]);
+  assert.deepEqual(restored.removals, []);
+  assert.deepEqual(restored.order, ['a', 'b']);
+  assert.deepEqual(restored.markers, [{ id: 'section', y: -20, label: 'Ideas', kind: 'section' }]);
+  scroll.acknowledgeChanges(restored.token);
+  scroll.redo();
+  assert.deepEqual(scroll.pendingChanges().removals, ['a', 'b']);
+  assert.deepEqual(scroll.pendingChanges().markers, []);
+});
+
+test('clear handles marker-only scrolls and an empty clear does not consume history', () => {
+  const scroll = new Notebook();
+  assert.equal(scroll.clear(), false);
+  assert.equal(scroll.canUndo, false);
+  assert.deepEqual(scroll.pendingChanges(), { token: 0, upserts: [], removals: [] });
+  scroll.addMarker({ id: 'only', y: 0, label: '', kind: 'page-break' });
+  scroll.acknowledgeChanges(scroll.pendingChanges().token);
+  assert.equal(scroll.clear(), true);
+  assert.deepEqual(scroll.pendingChanges().upserts, []);
+  assert.deepEqual(scroll.pendingChanges().removals, []);
+  assert.deepEqual(scroll.pendingChanges().markers, []);
+  assert.equal(scroll.clear(), false);
+  scroll.undo();
+  assert.equal(scroll.markers[0].id, 'only');
+});
