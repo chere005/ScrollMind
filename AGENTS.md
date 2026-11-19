@@ -1,3 +1,10 @@
+<!-- AgentSuite:reference:begin -->
+Read and follow the shared baseline at `~/GIT/AgentSuite/AGENTS.md` before working here.
+If the checkout is elsewhere, locate `AgentSuite/AGENTS.md` beside this repository's main checkout.
+The shared `dtp` and `tdtp` definitions, authorization, and installed result apply in every project and worktree; local lane details do not redefine them.
+@~/GIT/AgentSuite/AGENTS.md
+<!-- AgentSuite:reference:end -->
+
 - Support macOS 13+ on Apple silicon and Windows 10+ x64; keep portable drawing behavior in src/core and OS integration in src/main.
 - Work on a branch, stage explicit paths, and run npm run preflight before merging or pushing; finish checked releases on main.
 - Desktop checks must use hidden windows and disposable data; serialize heavy builds and preserve the running app's final save before replacing it.
