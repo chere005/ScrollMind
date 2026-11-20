@@ -1,6 +1,7 @@
 import { normalizePalette } from './palette.mjs';
 // The scroll contains only portable data. Drawing and filesystem APIs live elsewhere.
-import { brushWidth, maxBrushWidth, brushCap } from './brushes.mjs';
+import { brushWidth, maxBrushWidth, brushCap, isPenType } from './brushes.mjs';
+import { isFill, pointsToContours, pointInContours } from './fill.mjs';
 import { strokeGeometry, geometryHitsPoint, geometryIntersectsRect } from './stroke-geometry.mjs';
 import { DEFAULT_GRID, GRID_LIMIT, DIAGRAM_SHAPES } from './grid.mjs';
 
@@ -49,7 +50,7 @@ function normalizeSettings(value = {}) {
   if (!PAPERS.has(paper)) throw new TypeError('Unknown paper style.');
   const paperTone = value.paperTone ?? DEFAULT_SETTINGS.paperTone;
   if (!PAPER_TONES.has(paperTone)) throw new TypeError('Unknown paper tone.');
-  if (value.penType !== undefined) brushCap(value.penType);
+  if (value.penType !== undefined && !isPenType(value.penType)) throw new TypeError('Unknown pen type.');
   if (value.mode !== undefined && !['scroll', 'grid'].includes(value.mode)) throw new TypeError('Unknown canvas mode.');
   let grid;
   if (value.grid !== undefined || value.mode === 'grid') {
@@ -223,6 +224,13 @@ function segmentRadius(stroke, a, b = a) {
 function strokeBounds(stroke) {
   // Only immutable model strokes are cached: callers may mutate their own previews.
   if (Object.isFrozen(stroke) && cachedBounds.has(stroke)) return cachedBounds.get(stroke);
+  if (isFill(stroke)) {
+    const xs = stroke.points.map(point => point.x), ys = stroke.points.map(point => point.y);
+    const left = Math.min(...xs), top = Math.min(...ys);
+    const outline = { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
+    if (Object.isFrozen(stroke)) cachedBounds.set(stroke, outline);
+    return outline;
+  }
   const geometry = strokeGeometry(stroke);
   if (geometry) return geometry.bounds;
   let left = Infinity;
@@ -343,6 +351,11 @@ function squareHitsPoint(corners, point, radius) {
 
 export function strokeIntersectsRect(stroke, value) {
   const rect = normalizedRect(value);
+  if (isFill(stroke)) {
+    // A fill is picked up only whole, so a selection box swept across the page does not drag every colour along.
+    const outline = strokeBounds(stroke);
+    return rect.x <= outline.x && rect.y <= outline.y && rect.x + rect.width >= outline.x + outline.width && rect.y + rect.height >= outline.y + outline.height;
+  }
   const geometry = strokeGeometry(stroke);
   if (geometry) return geometryIntersectsRect(geometry, rect);
   if (!overlaps(strokeBounds(stroke), rect)) return false;
@@ -384,6 +397,7 @@ export function strokeHitsPoint(stroke, point, radius = 0) {
   finite(point?.x, 'Hit point x');
   finite(point?.y, 'Hit point y');
   finite(radius, 'Hit radius', 0, MAX_COORDINATE);
+  if (isFill(stroke)) return pointInContours(pointsToContours(stroke.points), point.x, point.y);
   const geometry = strokeGeometry(stroke);
   if (geometry) return geometryHitsPoint(geometry, point, radius);
   if (!overlaps(strokeBounds(stroke), { x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 })) return false;

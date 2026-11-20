@@ -134,7 +134,7 @@ function createMenu() {
       { type: 'separator' }, action('Clear Current Document', 'clear-scroll'),
     ] },
     { label: 'View', submenu: [
-      action('Pen', 'tool-pen'), action('Eraser', 'tool-eraser'),
+      action('Pen', 'tool-pen'), action('Eraser', 'tool-eraser'), action('Fill', 'tool-fill'),
       action('Rectangle Selection', 'tool-select'), action('Hand', 'tool-hand'),
       { type: 'separator' },
       action('Zoom In', 'zoom-in'), action('Zoom Out', 'zoom-out'), action('Actual Size', 'zoom-reset'),

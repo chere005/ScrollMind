@@ -6,8 +6,8 @@ const crypto = require('node:crypto');
 const { DatabaseSync, backup: sqliteBackup } = require('node:sqlite');
 
 const APPLICATION_ID = 0x534d4e44; // SMND
-const SCHEMA_VERSION = 4;
-const GRID_FORMAT = Object.freeze({ applicationId: 0x534d4752, version: 1, ext: 'smg', name: 'grid' });
+const SCHEMA_VERSION = 5; // 5: strokes may be fills (pen_type 'fill')
+const GRID_FORMAT = Object.freeze({ applicationId: 0x534d4752, version: 2, ext: 'smg', name: 'grid' }); // 2: strokes may be fills
 const SCROLL_FORMAT = Object.freeze({ applicationId: APPLICATION_ID, version: SCHEMA_VERSION, ext: 'sm', name: 'scroll' });
 const formatFor = kind => kind === 'grid' ? GRID_FORMAT : SCROLL_FORMAT;
 const MAX_FILE_BYTES = 1024 * 1024 * 1024;
@@ -199,7 +199,7 @@ function createStore(directory, { validate, kind } = {}) {
     } else if (db.prepare('PRAGMA user_version').get().user_version < format.version) {
       // New metadata and brush types share the existing table layout.
       db.exec('BEGIN IMMEDIATE');
-      try { db.exec(`PRAGMA user_version=${SCHEMA_VERSION}; COMMIT;`); }
+      try { db.exec(`PRAGMA user_version=${format.version}; COMMIT;`); }
       catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
     }
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=1000;');

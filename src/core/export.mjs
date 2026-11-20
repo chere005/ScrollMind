@@ -1,6 +1,7 @@
 import { boundsOf, validateSnapshot } from './model.mjs';
 import { brushWidth, brushCap, brushOpacity } from './brushes.mjs';
 import { strokeGeometry } from './stroke-geometry.mjs';
+import { isFill, pointsToContours, contoursPath } from './fill.mjs';
 import { GRID_CELL, gridPage, gridBounds, diagramBounds, diagramRoutes, connectorPath, shapePaths } from './grid.mjs';
 import { TONES, paperTone, inkOnPaper } from './paper.mjs';
 
@@ -143,7 +144,21 @@ function diagramSVG(nodes, routes, settings, rect, resourceBudget) {
   return lines.length || shapes.length ? `<g stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${lines.join('')}${shapes.join('')}</g>` : '';
 }
 
+/** Fills sit beneath all ink, in drawing order among themselves. */
+function inDrawingOrder(entries) {
+  return [...entries.filter(entry => isFill(entry.stroke)), ...entries.filter(entry => !isFill(entry.stroke))];
+}
+
+function fillSVG(stroke, settings, resourceBudget, minY, maxY) {
+  const contours = pointsToContours(stroke.points);
+  const ys = stroke.points.map(point => point.y);
+  if (Math.max(...ys) < minY || Math.min(...ys) > maxY) return '';
+  const path = resourceBudget.add(`<path d="${contoursPath(contours, n)}" fill="${inkOnPaper(stroke.color, paperTone(settings))}" fill-rule="evenodd" stroke="none"/>`, stroke.points.length);
+  return `<g data-stroke-id="${xml(stroke.id)}" data-pen-type="fill">${path}</g>`;
+}
+
 function strokeSVG(stroke, settings, resourceBudget, minY = -Infinity, maxY = Infinity) {
+  if (isFill(stroke)) return fillSVG(stroke, settings, resourceBudget, minY, maxY);
   const points = stroke.points;
   const color = inkOnPaper(stroke.color, paperTone(settings));
   const geometry = strokeGeometry(stroke);
@@ -186,7 +201,7 @@ export function exportSVG(snapshot, options = {}) {
   const displayScale = Math.min(1, 32768 / Math.max(rect.width, rect.height));
   const content = definitions(document.settings, 'scroll') + paper(document.settings, rect, 'scroll')
     + markers(document, rect) + diagramSVG(nodes, routes, document.settings, rect, resourceBudget)
-    + entries.map(entry => strokeSVG(entry.stroke, document.settings, resourceBudget)).join('');
+    + inDrawingOrder(entries).map(entry => strokeSVG(entry.stroke, document.settings, resourceBudget)).join('');
   const result = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${n(rect.width * displayScale)}" height="${n(rect.height * displayScale)}" viewBox="${n(rect.x)} ${n(rect.y)} ${n(rect.width)} ${n(rect.height)}"><title>ScrollMind ${document.settings.mode === 'grid' ? 'Grid' : 'Scroll'}</title>${content}</svg>`;
   if (result.length > MAX_EXPORT_CHARACTERS) throw new RangeError('This scroll is too large to export in one file. Export a smaller scroll.');
   return result;
@@ -219,7 +234,7 @@ function gridPDF({ document, entries, rect, nodes, routes }, resourceBudget) {
     for (let x = rect.x; x < rect.x + rect.width; x += width) {
       const prefix = `page-${pages.length}`, tile = { x, y, width, height };
       const drawings = diagramSVG(nodes, routes, document.settings, tile, resourceBudget)
-        + entries.filter(entry => overlaps(entry.bounds, tile)).map(entry => strokeSVG(entry.stroke, document.settings, resourceBudget, y, y + height)).join('');
+        + inDrawingOrder(entries.filter(entry => overlaps(entry.bounds, tile))).map(entry => strokeSVG(entry.stroke, document.settings, resourceBudget, y, y + height)).join('');
       const content = definitions(document.settings, prefix, tile) + paper(document.settings, tile, prefix)
         + `<g clip-path="url(#${prefix}-clip)">${drawings}</g>`;
       pages.push(pdfPage(document.settings, tile, y + height, content, 'xMidYMid meet'));
@@ -260,7 +275,7 @@ function scrollPDF({ document, entries, rect, empty, nodes, routes }, viewport, 
       active.set(entry.order, entry);
     }
     for (const [order, entry] of active) if (entry.bounds.y + entry.bounds.height < page.y) active.delete(order);
-    const strokes = [...active.values()].sort((a, b) => a.order - b.order)
+    const strokes = inDrawingOrder([...active.values()].sort((a, b) => a.order - b.order))
       .map(entry => strokeSVG(entry.stroke, document.settings, resourceBudget, page.y, page.end)).join('');
     const content = definitions(document.settings, prefix, clip) + paper(document.settings, worldRect, prefix)
       + `<g clip-path="url(#${prefix}-clip)">${markers(document, worldRect, page.end, { pdf: true, final: index === pages.length - 1 })}${diagramSVG(nodes, routes, document.settings, clip, resourceBudget)}${strokes}</g>`;

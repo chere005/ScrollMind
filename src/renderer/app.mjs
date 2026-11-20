@@ -6,7 +6,8 @@ import { brushWidth, brushCap, brushOpacity } from '../core/brushes.mjs';
 import { strokeGeometry } from '../core/stroke-geometry.mjs';
 import { createPenControls } from './pen-controls.mjs';
 import { localizeShortcut } from '../core/shortcut-labels.mjs';
-import { DEFAULT_GRID, GRID_LIMIT, DIAGRAM_SHAPES, diagramBounds, diagramRoutes, gridBounds, gridStartView, routeConnection, shapePorts } from '../core/grid.mjs';
+import { DEFAULT_GRID, GRID_LIMIT, DIAGRAM_SHAPES, diagramBounds, diagramRoutes, gridBounds, gridStartView, routeConnection, shapePaths, shapePorts, connectorPath } from '../core/grid.mjs';
+import { FILL_TYPE, isFill, fillRegion, contoursToPoints, pointsToContours, contoursPath } from '../core/fill.mjs';
 import { TONES as tones, paperTone, inkOnPaper } from '../core/paper.mjs';
 import { paintGrid, paintDiagram, paintShapeHandles, diagramHit, drawShapeBox, resizeShapeBox } from './grid-canvas.mjs';
 
@@ -252,16 +253,21 @@ function displayColor(color) {
 function transformStroke(stroke, t) {
   return { ...stroke, width: Math.max(.01, Math.min(1000, stroke.width * Math.sqrt(Math.abs(t.scaleX * t.scaleY)))), points: stroke.points.map(point => ({ ...point, x: t.originX + (point.x - t.originX) * t.scaleX + t.dx, y: t.originY + (point.y - t.originY) * t.scaleY + t.dy })) };
 }
-function drawStroke(paint, stroke) {
+function drawStroke(paint, stroke, flat) {
   const points = stroke.points; if (!points.length) return;
+  if (isFill(stroke)) {
+    let path = Object.isFrozen(stroke) ? paintedPaths.get(stroke) : null;
+    if (!path) { path = new Path2D(contoursPath(pointsToContours(points))); if (Object.isFrozen(stroke)) paintedPaths.set(stroke, path); }
+    paint.save(); paint.fillStyle = flat ?? displayColor(stroke.color); paint.fill(path, 'evenodd'); paint.restore(); return;
+  }
   const geometry = strokeGeometry(stroke);
   if (geometry) {
     let path = Object.isFrozen(stroke) ? paintedPaths.get(stroke) : null;
     if (!path) { path = new Path2D(geometry.path); if (Object.isFrozen(stroke) && Object.isFrozen(stroke.points) && stroke.points.every(Object.isFrozen)) paintedPaths.set(stroke, path); }
-    paint.save(); paint.fillStyle = displayColor(stroke.color); paint.globalAlpha = brushOpacity(stroke.penType); paint.fill(path); paint.restore(); return;
+    paint.save(); paint.fillStyle = flat ?? displayColor(stroke.color); paint.globalAlpha = flat ? 1 : brushOpacity(stroke.penType); paint.fill(path); paint.restore(); return;
   }
   paint.save();
-  paint.strokeStyle = displayColor(stroke.color); paint.fillStyle = displayColor(stroke.color); paint.lineCap = brushCap(stroke.penType); paint.lineJoin = 'round';
+  paint.strokeStyle = flat ?? displayColor(stroke.color); paint.fillStyle = flat ?? displayColor(stroke.color); paint.lineCap = brushCap(stroke.penType); paint.lineJoin = 'round';
   const size = (p, angle = 0) => brushWidth(stroke.width, p ?? .5, stroke.penType, angle);
   if (points.length === 1) {
     const point = points[0], diameter = size(point.p);
@@ -301,8 +307,13 @@ function render() {
       active?.kind === 'ink' ? active.bounds : null, preview ? boundsOf(preview) : null) : null;
     baseDirty = false; drawPaper(pages);
     paintDiagram(ctx, shownNodes, routes, tone, gridMode() ? diagramSelection : null);
-    for (const stroke of scroll.query({ x: viewX() - 100, y: viewY() - 100, width: viewWidth() + 200, height: viewHeight() + 200 })) if (!(transform && selection.has(stroke.id))) drawStroke(ctx, stroke);
-    if (preview) for (const stroke of preview) drawStroke(ctx, stroke);
+    const visible = scroll.query({ x: viewX() - 100, y: viewY() - 100, width: viewWidth() + 200, height: viewHeight() + 200 }).filter(stroke => !(transform && selection.has(stroke.id)));
+    const shown = preview ? [...visible, ...preview] : visible;
+    // Fills lie beneath all ink; shape outlines are drawn again over them so a fill never covers a line.
+    const fills = shown.filter(isFill);
+    for (const stroke of fills) drawStroke(ctx, stroke);
+    if (fills.length && (shownNodes.length || routes.length)) paintDiagram(ctx, shownNodes, routes, tone, gridMode() ? diagramSelection : null, undefined, true);
+    for (const stroke of shown) if (!isFill(stroke)) drawStroke(ctx, stroke);
   }
   ink.setTransform(1, 0, 0, 1, 0, 0); ink.clearRect(0, 0, overlay.width, overlay.height);
   setWorldTransform(ink);
@@ -372,10 +383,50 @@ function appendPoint(event, pressure) {
 }
 function eraseAt(point) {
   const radius = 12;
-  const hits = scroll.query({ x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 }).filter(stroke => strokeHitsPoint(stroke, point, radius));
+  const touched = scroll.query({ x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 }).filter(stroke => strokeHitsPoint(stroke, point, radius));
+  // A drag that starts on ink erases only ink, so wiping out a line inside a coloured area leaves the colour.
+  // A drag that starts on a fill erases fills and whatever ink it crosses.
+  const ink = touched.filter(stroke => !isFill(stroke));
+  active.erases ??= touched.length ? (ink.length ? 'ink' : 'fill') : null;
+  const hits = active.erases === 'ink' ? ink : touched;
   const diagram = !hits.length && gridMode() ? diagramHit(scroll.diagram.nodes, liveRoutes(), point) : null;
   const removed = diagram ? scroll.removeDiagramItem(diagram.node?.id ?? diagram.route.id) : scroll.remove(hits.map(stroke => stroke.id));
   if (removed) { active.changed = true; requestRender(); }
+}
+/** Ink and shape outlines on the visible page as a 1 = barrier bitmap, one pixel per CSS pixel. */
+function rasterBarrier(w, h) {
+  const canvas = new OffscreenCanvas(w, h), flat = canvas.getContext('2d', { willReadFrequently: true });
+  const zoom = zoomLevel();
+  flat.setTransform(zoom, 0, 0, zoom, -viewX() * zoom, -viewY() * zoom);
+  for (const stroke of scroll.query({ x: viewX() - 50, y: viewY() - 50, width: viewWidth() + 100, height: viewHeight() + 100 })) if (!isFill(stroke)) drawStroke(flat, stroke, '#000');
+  if (gridMode()) {
+    flat.lineWidth = 3; flat.lineJoin = 'round'; flat.lineCap = 'round'; flat.strokeStyle = '#000';
+    for (const node of scroll.diagram.nodes) { const { outline, detail } = shapePaths(node); flat.stroke(new Path2D(outline)); if (detail) flat.stroke(new Path2D(detail)); }
+    for (const route of liveRoutes()) flat.stroke(new Path2D(connectorPath(route.points)));
+  }
+  const { data } = flat.getImageData(0, 0, w, h), barrier = new Uint8Array(w * h);
+  for (let index = 0; index < barrier.length; index++) barrier[index] = data[index * 4 + 3] > 40 ? 1 : 0;
+  return barrier;
+}
+const FILL_MESSAGES = { open: 'That area isn’t closed · close the outline or zoom out', blocked: 'Tap inside an outlined area, not on a line', tiny: 'That area is too small to fill' };
+function fillAt(event) {
+  const w = Math.round(width), h = Math.round(height);
+  const result = fillRegion({ barrier: rasterBarrier(w, h), width: w, height: h, seedX: Math.floor(event.clientX), seedY: Math.floor(event.clientY) });
+  if (result.status !== 'filled') return message(FILL_MESSAGES[result.status]);
+  const zoom = zoomLevel(), left = viewX(), top = viewY();
+  const fill = makeStroke(contoursToPoints(result.contours, corner => ({ x: corner.x / zoom + left, y: corner.y / zoom + top })), settings.color, 1, FILL_TYPE);
+  // Filling an area that already has a fill of its own recolours it instead of stacking another.
+  const point = world(event), outline = boundsOf([fill]);
+  const same = scroll.query({ x: point.x - 1, y: point.y - 1, width: 2, height: 2 }).filter(stroke => {
+    if (!isFill(stroke) || !strokeHitsPoint(stroke, point, 0)) return false;
+    const old = boundsOf([stroke]);
+    return [old.x - outline.x, old.y - outline.y, old.width - outline.width, old.height - outline.height].every(delta => Math.abs(delta) <= 4 / zoom);
+  });
+  scroll.beginGroup();
+  if (same.length) scroll.remove(same.map(stroke => stroke.id));
+  scroll.add([fill]);
+  scroll.endGroup();
+  changed(); message('Filled');
 }
 function startDiagramGesture(currentTool, event, point) {
   const pointerId = event.pointerId;
@@ -428,6 +479,7 @@ function pointerDown(event) {
   };
   else if (currentTool === 'eraser') { scroll.beginGroup(); active = { kind: barrelErase ? 'barrel-erase' : 'erase', pointerId: event.pointerId, changed: false, previous: point }; eraseAt(point); }
   else if (currentTool === 'zoom') active = { kind: 'zoom', pointerId: event.pointerId, x: event.clientX, y: event.clientY, startZoom: zoomLevel() };
+  else if (currentTool === 'fill') { fillAt(event); return; }
   else if (currentTool === 'shape') active = { kind: 'shape', pointerId: event.pointerId, shape: shapeKind, start: point, current: point, color: settings.color, width: settings.width, penType: settings.penType || 'pen', constrain: event.shiftKey, preview: [] };
   else if (currentTool === 'select') {
     const box = boundsOf(selectedStrokes());
@@ -436,9 +488,8 @@ function pointerDown(event) {
       const opposite = corners(box)[(corner + 2) % 4]; active = { kind: 'resize', pointerId: event.pointerId, box, opposite, start: point, transform: { scaleX: 1, scaleY: 1, originX: opposite.x, originY: opposite.y, dx: 0, dy: 0 } };
     } else if (box && inside(point, box, 7) && !event.shiftKey) active = { kind: 'move', pointerId: event.pointerId, start: point, dx: 0, dy: 0 };
     else {
-      const hit = !event.shiftKey
-        ? scroll.query({ x: point.x - 5, y: point.y - 5, width: 10, height: 10 }).findLast(stroke => strokeHitsPoint(stroke, point, 5))
-        : null;
+      const touched = !event.shiftKey ? scroll.query({ x: point.x - 5, y: point.y - 5, width: 10, height: 10 }).filter(stroke => strokeHitsPoint(stroke, point, 5)) : [];
+      const hit = touched.findLast(stroke => !isFill(stroke)) ?? touched.at(-1) ?? null;
       if (hit) {
         selection = new Set([hit.id]);
         active = { kind: 'move', pointerId: event.pointerId, start: point, dx: 0, dy: 0 };
@@ -513,7 +564,7 @@ function finishGesture(cancel = false) {
   else if (!cancel && gesture.kind === 'resize') modified = scroll.transform([...selection], gesture.transform);
   else if (!cancel && gesture.kind === 'marquee') {
     const box = rectangle(gesture.start, gesture.current); selection = gesture.previousSelection;
-    const hits = box.width < 3 && box.height < 3 ? scroll.query({ x: box.x - 5, y: box.y - 5, width: 10, height: 10 }).filter(stroke => strokeHitsPoint(stroke, gesture.current, 5)).slice(-1) : scroll.query(box).filter(stroke => strokeIntersectsRect(stroke, box));
+    const hits = box.width < 3 && box.height < 3 ? scroll.query({ x: box.x - 5, y: box.y - 5, width: 10, height: 10 }).filter(stroke => strokeHitsPoint(stroke, gesture.current, 5)).sort((a, b) => isFill(b) - isFill(a)).slice(-1) : scroll.query(box).filter(stroke => strokeIntersectsRect(stroke, box));
     for (const stroke of hits) selection.add(stroke.id);
   } else if (gesture.kind === 'pan') modified = viewY() !== gesture.initialY || viewX() !== gesture.initialX;
   try { if (overlay.hasPointerCapture(gesture.nativePointerId)) overlay.releasePointerCapture(gesture.nativePointerId); } catch {}
@@ -770,7 +821,7 @@ document.addEventListener('keydown', event => {
     else if (key === '-') action = 'zoom-out';
     else if (key === 's') { event.preventDefault(); flushSave().catch(() => {}); return; }
   } else {
-    if (key === 'b') action = 'tool-pen'; else if (key === 'e') action = 'tool-eraser'; else if (key === 'v') action = 'tool-select'; else if (key === 'h') action = 'tool-hand';
+    if (key === 'b') action = 'tool-pen'; else if (key === 'e') action = 'tool-eraser'; else if (key === 'f') action = 'tool-fill'; else if (key === 'v') action = 'tool-select'; else if (key === 'h') action = 'tool-hand';
     else if (key === 'delete' || key === 'backspace') action = 'delete'; else if (key === 'tab') action = 'toggle-toolbar'; else if (key === '?' || key === 'f1') action = 'help'; else if (key === 'f11') action = 'fullscreen'; else if (key === 'home') action = 'home';
     else if (key === ' ') { event.preventDefault(); if (!event.repeat) { finishGesture(); spaceDown = true; updateCursor(); } return; }
     else if (key === 'escape') {

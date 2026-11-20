@@ -23,6 +23,7 @@ The installer is **unsigned**. If SmartScreen blocks it, choose **More info**, t
 ## Write and arrange
 
 - **Ink:** Pen, Pencil, Fountain, Marker, and Highlighter; four widths from Fine to Broad; eight color swatches and a color wheel with brightness and hex controls.
+- **Fill:** color a closed outline of ink or a Grid shape with the current ink color; the color lies beneath the ink and is saved, exported, and undoable.
 - **Selection:** rectangular selection, moving, resizing, copy, cut, paste, duplicate, and undo/redo.
 - **Highlighting:** translucent strokes keep writing visible; separate passes build color.
 - **Shapes:** in Scroll mode, draw basic shapes as editable strokes. In Grid mode, move and resize flowchart shapes and attach automatically routed arrows.

@@ -6,6 +6,8 @@ Hover over the small circle at the top for 200 ms to expand the controls in plac
 
 Choose **Pen**, **Pencil**, **Fountain**, **Marker**, or **Highlighter**, then a width: **Fine**, **Medium**, **Bold**, or **Broad**. Pressure changes the width of new strokes. Existing writing keeps its original style.
 
+**Fill** colors one outlined area with the current ink color. Click or tap inside a closed outline of ink, or inside a Grid shape. Small gaps in a hand-drawn outline are bridged, and an island of ink inside the area stays unfilled. The color lies beneath all ink and shape outlines, so it never covers a line. Filling the same area again recolors it. An area that runs off the visible page is not closed, so zoom out or close the outline. Undo removes a fill in one step. An erase drag that starts on ink erases only ink, so a colored area survives wiping out its outline; start the erase drag inside the color to remove it. A selection box picks up a fill only when it encloses the whole area. The pen's lower and upper buttons keep their usual actions while Fill is chosen.
+
 Highlighter starts with Yellow and Broad width. Its translucent strokes keep writing visible: a continuous pass has uniform opacity, including where it overlaps itself, while separate strokes build color. During the session, switching back restores your previous ink color and width.
 
 Each Scroll and Grid saves its own eight swatches. Open **Color palette and wheel** from the pen bar, choose a color with the wheel or hex field, then pick a swatch and choose **Save current color**. You can name each swatch or restore the default palette.
@@ -22,7 +24,7 @@ The mouse selects and moves by default. Choose Pen or press B to draw with it. T
 
 | Action | Control |
 | --- | --- |
-| Pen / Eraser / Rectangle selection / Hand | B / E / V / H |
+| Pen / Eraser / Fill / Rectangle selection / Hand | B / E / F / V / H |
 | Scroll vertically | Mouse wheel or trackpad |
 | Pan | Space + drag or middle-button drag. Grid mode pans in both directions. |
 | Zoom | Ctrl + wheel, trackpad pinch, ⌘ + / ⌘ −, or the sidebar’s zoom buttons |

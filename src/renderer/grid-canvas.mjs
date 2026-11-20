@@ -30,7 +30,7 @@ export function paintGrid(paint, bounds, grid, view, tone) {
 	paint.restore();
 }
 
-export function paintDiagram(paint, nodes, routes, tone, selected, draftConnection) {
+export function paintDiagram(paint, nodes, routes, tone, selected, draftConnection, linesOnly = false) {
 	paint.save();
 	paint.lineJoin = 'round'; paint.lineCap = 'round'; paint.lineWidth = 2;
 	for (const route of routes) {
@@ -46,7 +46,8 @@ export function paintDiagram(paint, nodes, routes, tone, selected, draftConnecti
 	for (const node of nodes) {
 		const { outline, detail } = shapePaths(node), path = new Path2D(outline);
 		paint.fillStyle = TONES[tone].background; paint.strokeStyle = inkOnPaper(node.color, tone);
-		paint.fill(path); paint.stroke(path);
+		if (!linesOnly) paint.fill(path);
+		paint.stroke(path);
 		if (detail) paint.stroke(new Path2D(detail));
 	}
 	paint.restore();

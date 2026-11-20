@@ -1,7 +1,11 @@
+import { FILL_TYPE } from './fill.mjs';
+
 export const PEN_TYPES = Object.freeze(['pen', 'pencil', 'fountain', 'marker', 'highlighter']);
+/** Pens a person can choose. A stroke can also be a fill, which the Fill tool makes and no pen setting names. */
+export const isPenType = (value) => PEN_TYPES.includes(value);
 
 function type(value) {
-  if (value !== undefined && !PEN_TYPES.includes(value)) throw new TypeError('Unknown pen type.');
+  if (value !== undefined && value !== FILL_TYPE && !PEN_TYPES.includes(value)) throw new TypeError('Unknown pen type.');
   return value;
 }
 

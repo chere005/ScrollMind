@@ -6,6 +6,7 @@ import { basename, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { gridPage, gridStartView } from '../src/core/grid.mjs';
 import { feedYaml } from '../tools/update-feed.mjs';
+import { inkOnPaper } from '../src/core/paper.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -85,7 +86,7 @@ function readNativeScroll(file) {
     expect([0x534d4e44, 0x534d4752]).toContain(applicationId);
     const grid = applicationId === 0x534d4752;
     const schema = database.prepare('PRAGMA user_version').get().user_version;
-    expect(grid ? [1] : [1, 2, 3, 4]).toContain(schema);
+    expect(grid ? [1, 2] : [1, 2, 3, 4, 5]).toContain(schema);
     const metadata = Object.fromEntries(database.prepare('SELECT key, value FROM metadata').all().map(row => [row.key, JSON.parse(row.value)]));
     return {
       version: 1,
@@ -1681,4 +1682,117 @@ test('a stray cancel from another pointer never snaps a mouse drag of selected i
 	await page.evaluate(() => document.querySelector('#overlay').dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1, pointerType: 'mouse' })));
 	await page.mouse.up();
 	expect((await snapshot()).strokes[0].points[0].x).toBeCloseTo(moved.points[0].x);
+});
+
+test('Fill colours an outlined area beneath the ink, recolours it, refuses open areas, and undoes in one step', async () => {
+	// A closed square of ink with a smaller square inside it.
+	await draw({ x: 400, y: 300 }, { x: 640, y: 300 });
+	await drag({ x: 640, y: 300 }, { x: 640, y: 520 });
+	await drag({ x: 640, y: 520 }, { x: 400, y: 520 });
+	await drag({ x: 400, y: 520 }, { x: 400, y: 300 });
+	await drag({ x: 480, y: 380 }, { x: 560, y: 380 });
+	await drag({ x: 560, y: 380 }, { x: 560, y: 440 });
+	await drag({ x: 560, y: 440 }, { x: 480, y: 440 });
+	await drag({ x: 480, y: 440 }, { x: 480, y: 380 });
+	const ink = (await snapshot()).strokes;
+	expect(ink).toHaveLength(8);
+
+	await openPenControls();
+	await page.locator('[data-color="#215b9c"]').click();
+	await page.locator('[data-tool="fill"]').click();
+	await expect(page.locator('[data-tool="fill"]')).toHaveAttribute('aria-pressed', 'true');
+	await page.mouse.click(430, 330);
+	await expect.poll(async () => (await snapshot()).strokes.filter(stroke => stroke.penType === 'fill').length).toBe(1);
+	let fills = (await snapshot()).strokes.filter(stroke => stroke.penType === 'fill');
+	expect(fills[0].color.toLowerCase()).toBe('#215b9c');
+	expect(fills[0].points.some(point => point.p === 0)).toBe(true);
+	const box = fills[0].points.reduce((sum, point) => ({ left: Math.min(sum.left, point.x), right: Math.max(sum.right, point.x), top: Math.min(sum.top, point.y), bottom: Math.max(sum.bottom, point.y) }), { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity });
+	expect(box.right - box.left).toBeGreaterThan(230);
+	expect(box.right - box.left).toBeLessThan(250);
+	expect((await snapshot()).strokes.filter(stroke => stroke.penType !== 'fill')).toEqual(ink);
+	const pixel = async (x, y) => page.evaluate(([x, y]) => [...document.querySelector('#canvas').getContext('2d').getImageData(x * devicePixelRatio, y * devicePixelRatio, 1, 1).data].slice(0, 3), [x, y]);
+	await expect.poll(() => pixel(430, 330)).toEqual([0x21, 0x5b, 0x9c]);
+	expect(await pixel(520, 410)).not.toEqual([0x21, 0x5b, 0x9c]);
+
+	// The same area again recolours it instead of stacking a second fill.
+	await openPenControls();
+	await page.locator('[data-color="#b94d49"]').click();
+	await page.locator('[data-tool="fill"]').click();
+	await page.mouse.click(430, 330);
+	await expect.poll(async () => (await snapshot()).strokes.filter(stroke => stroke.penType === 'fill').map(stroke => stroke.color.toLowerCase())).toEqual(['#b94d49']);
+
+	// The island inside is its own area, and ink erased inside a fill leaves the colour behind.
+	await page.mouse.click(520, 410);
+	await expect.poll(async () => (await snapshot()).strokes.filter(stroke => stroke.penType === 'fill').length).toBe(2);
+	await page.keyboard.press(`${modifier}+z`);
+	expect((await snapshot()).strokes.filter(stroke => stroke.penType === 'fill')).toHaveLength(1);
+	await openPenControls();
+	await page.locator('[data-tool="eraser"]').click();
+	await page.mouse.move(520, 300);
+	await page.mouse.down();
+	await page.mouse.move(522, 302, { steps: 2 });
+	await page.mouse.up();
+	expect((await snapshot()).strokes.filter(stroke => stroke.penType === 'fill')).toHaveLength(1);
+	expect((await snapshot()).strokes.filter(stroke => stroke.penType !== 'fill').length).toBeLessThan(8);
+
+	// Outside the outline the area runs off the page, so nothing is filled.
+	await openPenControls();
+	await page.locator('[data-tool="fill"]').click();
+	await page.mouse.click(900, 650);
+	await expect(page.locator('#status')).toContainText('isn’t closed');
+	expect((await snapshot()).strokes.filter(stroke => stroke.penType === 'fill')).toHaveLength(1);
+	// On a line nothing is filled either.
+	await page.mouse.click(640, 400);
+	await expect(page.locator('#status')).toContainText('outlined area');
+
+	// Exports carry the fill beneath the ink.
+	await showSidebar();
+	await page.locator('#export-svg').click();
+	const svg = await readFile(await exportedPath('svg'), 'utf8');
+	expect(svg).toContain('data-pen-type="fill"');
+	expect(svg.indexOf('data-pen-type="fill"')).toBeLessThan(svg.indexOf('data-stroke-id', svg.indexOf('data-pen-type="fill"') + 10));
+	expect(svg).toContain('fill-rule="evenodd"');
+});
+
+test('Fill works with the pen inside a Grid shape, keeps the outline on top, survives a restart, and an erase that starts on it removes it', async () => {
+	await showSidebar(); await page.locator('#grid-mode').click(); await showSidebar(false);
+	await clickPenControl('#diagram-shape');
+	await drag({ x: 500, y: 300 }, { x: 700, y: 420 });
+	const node = (await snapshot()).diagram.nodes[0];
+	await openPenControls();
+	const swatch = page.locator('[data-color]').nth(2);
+	const color = (await swatch.getAttribute('data-color')).toLowerCase();
+	await swatch.click();
+	await page.locator('[data-tool="fill"]').click();
+	await pointer('pointermove', 600, 360, { pressure: 0, buttons: 0, button: -1 });
+	await pointer('pointerdown', 600, 360);
+	await pointer('pointerup', 600, 360, { pressure: 0, buttons: 0 });
+	await expect.poll(async () => (await snapshot()).strokes.filter(stroke => stroke.penType === 'fill').length).toBe(1);
+	const [fill] = (await snapshot()).strokes;
+	expect(fill.color.toLowerCase()).toBe(color);
+	const xs = fill.points.map(point => point.x), ys = fill.points.map(point => point.y);
+	expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(node.width - 6);
+	expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(node.width + 6);
+	expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(node.height - 6);
+	const rgb = hex => [1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16));
+	const pixel = async (x, y) => page.evaluate(([x, y]) => [...document.querySelector('#canvas').getContext('2d').getImageData(x * devicePixelRatio, y * devicePixelRatio, 1, 1).data].slice(0, 3), [x, y]);
+	// Grid paper is night blue, where ink is shown lightened.
+	const shown = rgb(inkOnPaper(color, 'night'));
+	await expect.poll(() => pixel(600, 360)).toEqual(shown);
+	expect(await pixel(500, 360)).not.toEqual(shown);
+
+	const expected = await snapshot();
+	await closeGracefully();
+	await launch();
+	expect(await snapshot()).toEqual(expected);
+
+	await openPenControls();
+	await page.locator('[data-tool="eraser"]').click();
+	await page.mouse.move(600, 360);
+	await page.mouse.down();
+	await page.mouse.up();
+	await expect.poll(async () => (await snapshot()).strokes.length).toBe(0);
+	expect((await snapshot()).diagram.nodes).toHaveLength(1);
+	await page.keyboard.press(`${modifier}+z`);
+	expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([fill.id]);
 });

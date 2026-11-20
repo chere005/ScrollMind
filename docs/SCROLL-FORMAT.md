@@ -22,7 +22,7 @@ Recovery snapshots refresh at startup, first writing, every five minutes, and cl
 
 ## Schema
 
-Scrolls use SQLite application ID `0x534d4e44` (`SMND`) and schema **4**. Grids use application ID `0x534d4752` (`SMGR`) and schema **1**. Both use the following SQLite tables and portable document version **1**.
+Scrolls use SQLite application ID `0x534d4e44` (`SMND`) and schema **5**. Grids use application ID `0x534d4752` (`SMGR`) and schema **2**. Schema 5 and Grid schema 2 added fills; older versions refuse files of these versions instead of misreading them. Both use the following SQLite tables and portable document version **1**.
 
 | Table | Columns |
 | --- | --- |
@@ -32,7 +32,7 @@ Scrolls use SQLite application ID `0x534d4e44` (`SMND`) and schema **4**. Grids 
 
 Stroke points are JSON arrays of `{x,y,p}` objects. Coordinates are signed world coordinates; `p` preserves pressure precision. `order_index` defines drawing order. `bounds` stores a derived JSON geometry cache; readers should recompute it from the point data and current brush geometry.
 
-`pen_type` is `pen`, `pencil`, `fountain`, `marker`, or `highlighter`. An explicit `pen` uses the current brush. SQL `NULL` maps to an absent document `penType` field and preserves legacy ink appearance. Settings can separately store the selected `penType`. Highlighter transparency is a brush property; native files retain the original stroke color and point data.
+`pen_type` is `pen`, `pencil`, `fountain`, `marker`, `highlighter`, or `fill`. A fill's `points` are the outline of a colored area, closed implicitly; a point with pressure 0 starts a further outline (an island left unfilled). It is filled with the even-odd rule, drawn beneath all ink, and exported as a filled SVG path. An explicit `pen` uses the current brush. SQL `NULL` maps to an absent document `penType` field and preserves legacy ink appearance. Settings can separately store the selected `penType`. Highlighter transparency is a brush property; native files retain the original stroke color and point data.
 
 Marker kinds are `section`, `page-break`, and `marker`. Metadata stores `view` and `settings` as JSON, including paper, color, width, and selected pen style when present. Grid settings store the cell and block counts, grid paper color, and the last picked shape. Each document records its own pan and zoom. An optional `settings.palette` stores eight named six-digit hex colors in pen bar order.
 
