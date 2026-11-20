@@ -141,15 +141,21 @@ export class PenInput {
 			}
 			this.#nativeButtons = event.buttons;
 			const tipBit = Boolean(event.buttons & TIP);
+			// With a side switch involved and the display reporting its pen, the display's tip sensor alone says whether the pen touches:
+			// the driver's right click can carry a pressure (0.5 or 1) while the pen only hovers, and Pan/Scroll reports a touch at the
+			// pointer it froze. The display's report of the switch can come after the driver's click, so the click's own button counts.
+			const sideInvolved = Boolean((event.buttons | this.#hidButtons()) & (LOWER | UPPER)) || button === 1 || button === 2;
+			const displayDecides = this.#hidSeen && this.#range && sideInvolved;
 			// A pressured lower-button down may be the tip contact in Click & Tap mode.
 			// A macOS hover click can carry Chromium's default button pressure of 0.5.
-			const barrelContact = down && button === 2 && Boolean(event.buttons & LOWER) && !(event.buttons & REAR)
+			const barrelContact = !displayDecides && down && button === 2 && Boolean(event.buttons & LOWER) && !(event.buttons & REAR)
 				&& (this.#windowsInk || event.pressure !== .5);
-			this.#pressureTip = !tipBit && !up && event.pressure > 0 && (tipEdge || barrelContact || this.#pressureTip);
+			this.#pressureTip = !displayDecides && !tipBit && !up && event.pressure > 0 && (tipEdge || barrelContact || this.#pressureTip);
 			// With a barrel button held the driver may report the tip's touch with no tip bit at all, and a hover click can carry a
 			// default pressure; the display's own tip sensor settles both: pressure the page sees while the display says the tip is down.
 			const displayContact = this.#hidSeen && this.#hidTip && event.pressure > 0 && !up;
-			this.#tipDown = (tipBit || tipEdge || this.#pressureTip || displayContact || Boolean(this.#mouseButtons & TIP)) && !(up && button === 0);
+			this.#tipDown = displayDecides ? this.#hidTip && !up
+				: (tipBit || tipEdge || this.#pressureTip || displayContact || Boolean(this.#mouseButtons & TIP)) && !(up && button === 0);
 		} else {
 			const tracked = this.#mousePointerId === event.pointerId;
 			const bit = buttonBit(button);

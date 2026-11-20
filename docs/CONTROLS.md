@@ -54,7 +54,7 @@ ScrollMind responds to the standard mouse-button actions assigned in the Wacom d
 | --- | --- | --- |
 | Lower | Hold, then tap or drag the tip | Erases only where the tip touches: holding alone deletes nothing, and every tap or drag deletes until the button is let go. Each erase drag is one undo. |
 | Lower | Double-tap while hovering | Undo |
-| Upper | Hold and drag, hovering or touching | Scrolls (Grid mode scrolls in both directions) |
+| Upper | Hold, then touch and drag the tip | Scrolls (Grid mode scrolls in both directions). Holding alone, or moving the pen while it hovers, scrolls nothing (on the Wacom One 12; a driver's Hover Click on Windows scrolls while hovering). |
 | Upper | Double-tap while hovering | Redo |
 | Lower, then upper, tapped quickly (within 0.7 seconds) | Then tap and drag the tip | Zooms around the tip: drag up to zoom in, down to zoom out. Lifting the tip returns the pen to normal. |
 

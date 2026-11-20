@@ -174,7 +174,10 @@ function setTool(value, explicit = true) {
 }
 function updateCursor() {
   const pen = lastPointerType === 'pen';
-  overlay.style.cursor = ['pan', 'move', 'move-node'].includes(active?.kind) ? 'grabbing'
+  // A side switch held and the display placing the pen: the driver may have frozen the pointer where the switch went down, and the
+  // pen itself is on the display, so the page shows no pointer.
+  overlay.style.cursor = penInput.placing ? 'none'
+    : ['pan', 'move', 'move-node'].includes(active?.kind) ? 'grabbing'
     : spaceDown || tool === 'hand' ? 'grab'
     : pen && zoomNextTip ? 'zoom-in'
     : tool === 'select' || (tool === 'pen' && !mousePen && !pen) ? 'default' : 'crosshair';
@@ -469,6 +472,7 @@ function pointerDown(event) {
   const barrelErase = currentTool === 'eraser' && barrelDelete(event);
   if (event.pointerType === 'pen') trace(`down tool=${currentTool} B=${event.buttons} tipStarted=${event.tipStarted} contact=${contact(event)}`);
   if (barrelErase ? !event.tipStarted : currentTool !== 'hand' && !contact(event)) return;
+  if (currentTool === 'hand' && !spaceDown && tool !== 'hand' && placedHover(event)) return;
   if (event.tipStarted) zoomNextTip = false;
   event.preventDefault(); overlay.focus({ preventScroll: true });
   const point = world(event);
@@ -508,12 +512,15 @@ function captureGesture(event) {
   active.nativePointerId = event.nativePointerId ?? event.pointerId;
   capture(active.nativePointerId);
 }
+// The display places the pen and the upper switch is held while the pen only hovers: that scrolls nothing (hold, then tap and drag).
+const placedHover = event => event.placed && (event.buttons & 4) && !event.tipDown;
 function pointerMove(event) {
   if (!active) {
-    if (event.pointerType === 'pen' && ((event.buttons & 4) || event.tipStarted)) pointerDown(event);
+    if (event.pointerType === 'pen' && (((event.buttons & 4) && !placedHover(event)) || event.tipStarted)) pointerDown(event);
     return;
   }
   if (event.pointerId !== active.pointerId) return;
+  if (active.kind === 'pan' && active.upper && placedHover(event)) { finishGesture(); return; }
   event.preventDefault(); const currentTool = eventTool(event);
   if (active.kind === 'barrel-erase' && (!event.tipDown || !barrelDelete(event) || currentTool !== 'eraser')) { finishGesture(); return; }
   if (active.kind === 'pan' && active.temporary && currentTool !== 'hand') { finishGesture(); if (event.tipStarted) pointerDown(event); return; }
@@ -621,7 +628,8 @@ function route(event) {
     if (active?.kind === 'pan' && active.temporary && !(event.buttons & 4)) finishGesture();
     // Letting go of the delete button ends its erasing; a switch pressed during a stroke ends that stroke where it is.
     else if (active?.kind === 'barrel-erase' && !(event.buttons & 2)) finishGesture();
-    else if (event.type === 'pointerdown' && penInput.placing && active && active.kind !== 'pan') finishGesture();
+    // The display starts placing the pen: whatever the driver began for this switch (a stroke, a scroll from the pointer it froze) ends.
+    else if (event.type === 'pointerdown' && penInput.placing && active) finishGesture();
     updateCursor();
     return;
   }

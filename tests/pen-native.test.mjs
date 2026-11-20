@@ -137,6 +137,10 @@ test('the merged buttons ride every page event, the page keeps contact, and the 
 	// The same switch arriving as the driver's right click adds nothing.
 	const echoed = r.input.update({ ...hover(400, 300, 2), type: 'pointerdown', button: 2, pressure: 0 }, 120);
 	assert.equal(echoed.buttons, 2);
+	// With the switch held the display's tip sensor decides contact: the driver's pressure alone is not a touch.
+	const early = r.input.update({ ...hover(400, 300, 1), type: 'pointermove', pressure: .6, button: 0 }, 125);
+	assert.equal(early.tipDown, false);
+	r.native({ lower: true, tip: true, range: true }, 128);
 	// A tip touch carries both the tip and the switch.
 	const touch = r.input.update({ ...hover(400, 300, 1), type: 'pointermove', pressure: .6, button: 0 }, 130);
 	assert.equal(touch.buttons, 3);

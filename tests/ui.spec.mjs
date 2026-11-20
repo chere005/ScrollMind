@@ -1788,8 +1788,13 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await strokes()).toEqual(written);
 			await pointer('pointermove', 300, 250, { pressure: 0, buttons: 0, button: -1 });
 			await native({ lower: true, range: true });
+			// The driver's touch alone is not contact while the switch is held: the display's tip sensor says so.
+			await pointer('pointermove', 300, 250, { pressure: 0.6, buttons: 1, button: 0 });
+			expect(await strokes()).toEqual(written);
+			await native({ lower: true, tip: true, range: true });
 			await pointer('pointermove', 300, 250, { pressure: 0.6, buttons: 1, button: 0 });
 			await expect.poll(async () => (await strokes()).length).toBe(0);
+			await native({ lower: true, range: true });
 			await pointer('pointermove', 300, 250, { pressure: 0, buttons: 0, button: 0 });
 			await native({ range: true });
 			await page.keyboard.press(`${modifier}+z`);
@@ -1854,28 +1859,63 @@ for (const mode of ['scroll', 'grid']) {
 			await at(300, 250);
 		});
 
-		test('display pen: hold the upper button and move scrolls, hovering or touching, and the driver\'s own scrolling adds nothing', async () => {
+		test('display pen: hold the upper button, then touch and drag scrolls; hovering scrolls nothing, and the driver\'s own scrolling adds nothing', async () => {
 			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 			const written = await strokes();
 			const start = await origin();
+			const sideways = mode === 'grid' ? 1 : 0;
+			// Held while hovering, the pen moving: nothing scrolls, and Pan/Scroll's wheel at the frozen pointer is not a scroll.
 			await at(750, 500, { upper: true });
 			await at(690, 420, { upper: true });
-			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 80 });
-			// Pan/Scroll on that button turns the same movement into a wheel: it is not a second scroll.
 			await page.locator('#overlay').dispatchEvent('wheel', { deltaX: 0, deltaY: 300 });
-			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 80 });
-			// Touching while it is held keeps dragging the page and never inks.
+			expect(await origin()).toEqual(start);
+			// The tip touches and drags: the page follows the pen. The driver reports that touch at the pointer it froze, first.
+			await pointer('pointerdown', 750, 500, { pressure: 0.6, buttons: 5, button: 0 });
 			await at(690, 420, { upper: true, tip: true });
-			await at(690, 380, { upper: true, tip: true });
-			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 120 });
-			await at(690, 380, { upper: true });
-			await at(690, 380);
+			await pointer('pointermove', 750, 500, { pressure: 0.6, buttons: 5, button: -1 });
+			await at(650, 360, { upper: true, tip: true });
+			await at(630, 340, { upper: true, tip: true });
+			expect(await origin()).toEqual({ x: start.x + 60 * sideways, y: start.y + 80 });
+			// Lifted, still held: hovering scrolls nothing more. Touch again and the next drag scrolls on from there.
+			await at(630, 340, { upper: true });
+			await at(500, 200, { upper: true });
+			expect(await origin()).toEqual({ x: start.x + 60 * sideways, y: start.y + 80 });
+			await at(500, 200, { upper: true, tip: true });
+			await at(500, 160, { upper: true, tip: true });
+			expect(await origin()).toEqual({ x: start.x + 60 * sideways, y: start.y + 120 });
+			await at(500, 160, { upper: true });
+			await at(500, 160);
+			await pointer('pointerup', 750, 500, { pressure: 0, buttons: 0, button: 0 });
 			expect(await strokes()).toEqual(written);
-			// Let go: moving the pen scrolls nothing, and the pen writes.
-			await at(690, 200);
-			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 120 });
+			// Let go: the pen writes again.
+			await at(400, 600);
 			await ink(600, 600);
 			expect(await strokes()).toHaveLength(2);
+			expect(await origin()).toEqual({ x: start.x + 60 * sideways, y: start.y + 120 });
+		});
+
+		test('display pen: the driver\'s right click reaching the page before the display\'s report of the button deletes nothing', async () => {
+			await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
+			const written = await strokes();
+			await at(300, 250);
+			// The right click, with a pressure of 1 while the pen only hovers over the stroke, then the display's report of the button.
+			for (const pressure of [1, 0.5]) {
+				await pointer('pointerdown', 300, 250, { pressure, buttons: 2, button: 2 });
+				await pointer('pointermove', 310, 250, { pressure, buttons: 2, button: -1 });
+				await at(310, 250, { lower: true });
+				await at(320, 250, { lower: true });
+				expect(await strokes()).toEqual(written);
+				await at(320, 250);
+				await pointer('pointerup', 320, 250, { pressure: 0, buttons: 0, button: 2 });
+				expect(await strokes()).toEqual(written);
+				await page.waitForTimeout(600);
+			}
+			// Then held and tapped on the stroke: that deletes it.
+			await at(300, 250, { lower: true });
+			await at(300, 250, { lower: true, tip: true });
+			await expect.poll(async () => (await strokes()).length).toBe(0);
+			await at(300, 250, { lower: true });
+			await at(300, 250);
 		});
 
 		test('display pen: a double tap of the upper button redoes even while the driver scrolls for that button', async () => {
