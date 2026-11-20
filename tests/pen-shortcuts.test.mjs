@@ -178,10 +178,10 @@ test('default constructor still treats pressured button 2 as a hover press', () 
   assert.equal(tap(100), 'undo');
 });
 
-test('lower then upper arms one drag, while lower double-click and upper double-click retain history actions', () => {
+test('lower then upper arms one zoom drag, while lower double-click and upper double-click retain history actions', () => {
 	const shortcuts = new PenButtonShortcuts({ navigation: true });
 	assert.deepEqual([[2, 0], [4, 100], [4, 650], [4, 750], [2, 1300], [2, 1400]]
-		.map(([button, time]) => click(shortcuts, button, time)), [null, 'drag-next', null, 'redo', null, 'undo']);
+		.map(([button, time]) => click(shortcuts, button, time)), [null, 'zoom-next', null, 'redo', null, 'undo']);
 
 	click(shortcuts, 2, 2100);
 	shortcuts.update(event('pointerdown', 4), 2200);
@@ -192,9 +192,9 @@ test('lower then upper arms one drag, while lower double-click and upper double-
 	assert.equal(click(shortcuts, 2, 2500), null);
 });
 
-test('the ordered drag shortcut allows a longer pause without changing the undo double-click interval', () => {
+test('the ordered zoom shortcut allows a longer pause without changing the undo double-click interval', () => {
 	const shortcuts = new PenButtonShortcuts({ navigation: true });
 	assert.equal(click(shortcuts, 2, 0), null);
 	assert.equal(click(shortcuts, 2, 500), null);
-	assert.equal(click(shortcuts, 4, 1100), 'drag-next');
+	assert.equal(click(shortcuts, 4, 1100), 'zoom-next');
 });

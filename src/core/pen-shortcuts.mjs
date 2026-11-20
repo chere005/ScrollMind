@@ -3,7 +3,7 @@ const SCROLL_BUTTON = 4;
 const CONTACT_BUTTONS = 1 | 32;
 const MAX_CLICK_DURATION = 250;
 const PEN_CLICK_WINDOW = 400;
-const DRAG_SEQUENCE_WINDOW = 700;
+const ZOOM_SEQUENCE_WINDOW = 700;
 export const PEN_CLICK_MOVEMENT = 8;
 
 /** Recognize intentional hovering pen-button double-clicks without treating taps or pans as shortcuts. */
@@ -46,7 +46,7 @@ export class PenButtonShortcuts {
       state = null;
     }
     if (this.#candidate) {
-      const window = this.#navigation && this.#candidate.button === DELETE_BUTTON ? DRAG_SEQUENCE_WINDOW : PEN_CLICK_WINDOW;
+      const window = this.#navigation && this.#candidate.button === DELETE_BUTTON ? ZOOM_SEQUENCE_WINDOW : PEN_CLICK_WINDOW;
       if (now - this.#candidate.time > window) this.#candidate = null;
     }
     if (!state) {
@@ -80,9 +80,9 @@ export class PenButtonShortcuts {
         if (press.valid && buttons === 0) {
           const prior = this.#candidate?.pointerId === pointerId ? this.#candidate.button : null;
           const doubleClick = prior === press.button && now - this.#candidate.time <= PEN_CLICK_WINDOW;
-          const dragSequence = this.#navigation && prior === DELETE_BUTTON && press.button === SCROLL_BUTTON;
-          if (doubleClick || dragSequence) {
-            action = dragSequence ? 'drag-next' : press.button === DELETE_BUTTON ? 'undo' : 'redo';
+          const zoomSequence = this.#navigation && prior === DELETE_BUTTON && press.button === SCROLL_BUTTON;
+          if (doubleClick || zoomSequence) {
+            action = zoomSequence ? 'zoom-next' : press.button === DELETE_BUTTON ? 'undo' : 'redo';
             this.#candidate = null;
           } else {
             this.#candidate = { pointerId, button: press.button, time: now };

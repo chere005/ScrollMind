@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { createServer } from 'node:http';
-import { gridPage } from '../src/core/grid.mjs';
+import { gridPage, gridStartView } from '../src/core/grid.mjs';
 import { feedYaml } from '../tools/update-feed.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -1330,33 +1330,6 @@ test('grid controls, page growth, diagram editing and native persistence work to
 	await expect(page.locator('#diagram-shape')).toHaveText('Cylinder');
 });
 
-test('lower then upper moves ink on the next pen tap and restores the normal pen after that drag', async () => {
-	await draw({ x: 380, y: 300 }, { x: 530, y: 300 });
-	const original = (await snapshot()).strokes[0];
-	const hover = async (buttons, button) => {
-		await pointer('pointerdown', 450, 300, { pressure: 0, buttons, button });
-		await pointer('pointerup', 450, 300, { pressure: 0, buttons: 0, button });
-	};
-	await hover(2, 2);
-	await hover(4, 1);
-	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'grab');
-	await pointer('pointerdown', 450, 300);
-	await pointer('pointermove', 475, 350, { button: -1 });
-	await pointer('pointerup', 475, 350, { pressure: 0, buttons: 0 });
-	const moved = (await snapshot()).strokes;
-	expect(moved).toHaveLength(1);
-	expect(moved[0].id).toBe(original.id);
-	expect(moved[0].points[0].x).toBeCloseTo(original.points[0].x + 25);
-	expect(moved[0].points[0].y).toBeCloseTo(original.points[0].y + 50);
-	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
-
-	await pointer('pointerdown', 650, 450);
-	await pointer('pointermove', 680, 465, { button: -1 });
-	await pointer('pointerup', 680, 465, { pressure: 0, buttons: 0 });
-	expect((await snapshot()).strokes).toHaveLength(2);
-	expect((await snapshot()).view).toEqual({ offsetY: 0 });
-});
-
 test('Grid accepts pen ink, mixed Wacom barrel erasing, and one-shot shape dragging', async () => {
 	await showSidebar();
 	await page.locator('#grid-mode').click();
@@ -1490,4 +1463,187 @@ test('Check for Updates reaches the feed from the main process while pages stay 
 		delete process.env.SCROLLMIND_UPDATE_FEED;
 		await new Promise(resolveClose => server.close(resolveClose));
 	}
+});
+
+// The pen-button contract (docs/CONTROLS.md, Wacom buttons). It must hold in Scroll and Grid mode; do not weaken these tests.
+//   Lower button: hold and tap or drag to erase; double tap while hovering undoes.
+//   Upper button: hold and drag to scroll; double tap while hovering redoes.
+//   Lower tap then upper tap quickly: the next tap-and-drag zooms, then the pen is normal again.
+for (const mode of ['scroll', 'grid']) {
+	test.describe(`Pen button contract: ${mode}`, () => {
+		test.beforeEach(async () => {
+			if (mode !== 'grid') return;
+			await showSidebar();
+			await page.locator('#grid-mode').click();
+			await expect(page.locator('#sidebar-heading')).toHaveText('Grids');
+			await showSidebar(false);
+		});
+		const strokes = async () => (await snapshot()).strokes;
+		const ids = async () => (await strokes()).map(stroke => stroke.id);
+		const hoverClick = async (buttons, button, x = 750, y = 400) => {
+			await pointer('pointerdown', x, y, { pressure: 0, buttons, button });
+			await pointer('pointerup', x, y, { pressure: 0, buttons: 0, button });
+		};
+		const lowerClick = () => hoverClick(2, 2);
+		const upperClick = () => hoverClick(4, 1);
+		const origin = async () => {
+			const { view, settings } = await snapshot();
+			if (mode === 'scroll') return { x: view.scrollX ?? 0, y: view.offsetY ?? 0 };
+			const size = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+			const centered = gridStartView(settings.grid, size.width, size.height);
+			return { x: view.gridX ?? centered.x, y: view.gridY ?? centered.y };
+		};
+		const zoom = async () => { const { view } = await snapshot(); return (mode === 'grid' ? view.gridZoom : view.scrollZoom) ?? 1; };
+		const ink = async (x, y) => {
+			await pointer('pointerdown', x, y);
+			await pointer('pointermove', x + 60, y + 20, { button: -1 });
+			await pointer('pointerup', x + 60, y + 20, { pressure: 0, buttons: 0 });
+		};
+		const armZoom = async () => { await lowerClick(); await upperClick(); await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in'); };
+		const dragTip = async (x, y, toY) => {
+			await pointer('pointerdown', x, y);
+			await pointer('pointermove', x, (y + toY) / 2, { button: -1 });
+			await pointer('pointermove', x, toY, { button: -1 });
+			await pointer('pointerup', x, toY, { pressure: 0, buttons: 0 });
+		};
+
+		test('lower button: hold and tap erases that stroke, hold and drag erases what it crosses, each erase undoes alone', async () => {
+			await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
+			await draw({ x: 200, y: 400 }, { x: 400, y: 400 });
+			await draw({ x: 200, y: 550 }, { x: 400, y: 550 });
+			const [first, second, third] = await strokes();
+			await pointer('pointerdown', 300, 250, { pressure: 0, buttons: 2, button: 2 });
+			expect(await ids()).toEqual([first.id, second.id, third.id]);
+			await pointer('pointermove', 300, 250, { pressure: 0.6, buttons: 3, button: 0 });
+			await expect.poll(ids).toEqual([second.id, third.id]);
+			await pointer('pointermove', 300, 250, { pressure: 0, buttons: 2, button: 0 });
+			await pointer('pointermove', 300, 400, { pressure: 0.6, buttons: 3, button: 0 });
+			await pointer('pointermove', 300, 550, { pressure: 0.6, buttons: 3, button: -1 });
+			await expect.poll(ids).toEqual([]);
+			await pointer('pointermove', 300, 550, { pressure: 0, buttons: 2, button: 0 });
+			await pointer('pointerup', 300, 550, { pressure: 0, buttons: 0, button: 2 });
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await ids()).toEqual([second.id, third.id]);
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await ids()).toEqual([first.id, second.id, third.id]);
+		});
+
+		test('lower button: a single tap does nothing and a double tap while hovering undoes', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			await lowerClick();
+			expect(await strokes()).toEqual(written);
+			await lowerClick();
+			await expect.poll(async () => (await strokes()).length).toBe(0);
+		});
+
+		test('upper button: hold and drag scrolls whether the tip hovers or touches, and a single tap does nothing', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			const start = await origin();
+			await upperClick();
+			expect(await strokes()).toEqual(written);
+			expect(await origin()).toEqual(start);
+
+			await pointer('pointerdown', 750, 500, { pressure: 0, buttons: 4, button: 1 });
+			await pointer('pointermove', 690, 420, { pressure: 0, buttons: 4, button: -1 });
+			await pointer('pointerup', 690, 420, { pressure: 0, buttons: 0, button: 1 });
+			const moved = await origin();
+			expect(moved).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 80 });
+
+			await pointer('pointerdown', 750, 500, { pressure: 0, buttons: 4, button: 1 });
+			await pointer('pointermove', 750, 500, { pressure: 0.6, buttons: 5, button: 0 });
+			await pointer('pointermove', 690, 440, { pressure: 0.6, buttons: 5, button: -1 });
+			await pointer('pointermove', 690, 440, { pressure: 0, buttons: 4, button: 0 });
+			await pointer('pointerup', 690, 440, { pressure: 0, buttons: 0, button: 1 });
+			expect(await origin()).toEqual({ x: moved.x + (mode === 'grid' ? 60 : 0), y: moved.y + 60 });
+			expect(await strokes()).toEqual(written);
+		});
+
+		test('upper button: a single tap does nothing and a double tap while hovering redoes', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await strokes()).toEqual([]);
+			await upperClick();
+			expect(await strokes()).toEqual([]);
+			await upperClick();
+			await expect.poll(strokes).toEqual(written);
+		});
+
+		test('lower then upper tapped quickly arms tap-and-drag zoom for the next contact only', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			const before = { origin: await origin(), zoom: await zoom() };
+			const worldAt = (state, x, y) => ({ x: state.origin.x + x / state.zoom, y: state.origin.y + y / state.zoom });
+			await armZoom();
+			await dragTip(640, 400, 540);
+			expect(await strokes()).toEqual(written);
+			const zoomedIn = { origin: await origin(), zoom: await zoom() };
+			expect(zoomedIn.zoom).toBeCloseTo(before.zoom * 2, 1);
+			expect(worldAt(zoomedIn, 640, 400).x).toBeCloseTo(worldAt(before, 640, 400).x, 1);
+			expect(worldAt(zoomedIn, 640, 400).y).toBeCloseTo(worldAt(before, 640, 400).y, 1);
+			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+
+			await ink(700, 600);
+			expect(await strokes()).toHaveLength(2);
+			expect(await zoom()).toBeCloseTo(zoomedIn.zoom, 5);
+
+			await armZoom();
+			await dragTip(640, 540, 400);
+			expect(await zoom()).toBeCloseTo(before.zoom, 1);
+			expect(await strokes()).toHaveLength(2);
+		});
+
+		test('Escape cancels an armed zoom and the next contact writes', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			await armZoom();
+			await page.keyboard.press('Escape');
+			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+			await ink(600, 500);
+			expect(await strokes()).toHaveLength(2);
+			expect(await zoom()).toBe(1);
+		});
+
+		test('lower then upper in the wrong order, or after a pause, leaves the pen normal', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			await upperClick();
+			await lowerClick();
+			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+			await ink(600, 500);
+			expect(await strokes()).toHaveLength(2);
+			expect(await zoom()).toBe(1);
+
+			await lowerClick();
+			await page.waitForTimeout(900);
+			await upperClick();
+			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+			await ink(600, 600);
+			expect(await strokes()).toHaveLength(3);
+			expect(await zoom()).toBe(1);
+		});
+	});
+}
+
+test('Pen button contract: Windows Hover Click delivers lower then upper as mouse input and still arms zoom', async () => {
+	await relaunchWithPenPlatform('win32');
+	await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+	const written = (await snapshot()).strokes;
+	await page.evaluate(async () => {
+		const overlay = document.querySelector('#overlay');
+		const fire = (type, init) => overlay.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: 600, clientY: 400, ...init }));
+		fire('pointermove', { pointerId: 44, pointerType: 'pen', buttons: 0, pressure: 0 });
+		for (const [button, buttons] of [[2, 2], [1, 4]]) {
+			fire('pointerdown', { pointerId: 11, pointerType: 'mouse', button, buttons });
+			fire('pointerup', { pointerId: 11, pointerType: 'mouse', button, buttons: 0 });
+			await new Promise(resolve => setTimeout(resolve, 80));
+		}
+	});
+	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
+	await pointer('pointerdown', 640, 400);
+	await pointer('pointermove', 640, 470, { button: -1 });
+	await pointer('pointermove', 640, 540, { button: -1 });
+	await pointer('pointerup', 640, 540, { pressure: 0, buttons: 0 });
+	expect((await snapshot()).strokes).toEqual(written);
+	expect((await snapshot()).view.scrollZoom).toBeCloseTo(2, 1);
 });

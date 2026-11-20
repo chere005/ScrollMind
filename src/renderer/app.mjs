@@ -26,11 +26,13 @@ if (platform !== 'darwin') {
     const full = $('#help-fullscreen'); if (full) full.textContent = 'Ctrl+Shift+F or F11';
     // The Wacom help describes macOS driver wording; on Windows it describes Windows Ink and the driver's side-switch assignments.
     $('#help-wacom-intro').textContent = 'The tip writes with pressure. In the Wacom driver, turn on Windows Ink, then set the pen side switches:';
-    $('#help-wacom-buttons').innerHTML = '<dt>Side Switch Mode: Click & Tap</dt><dd>Lower switch on Right Click → hold and touch or drag to delete · no hover clicks, so put Undo/Redo (Ctrl+Z · Ctrl+Y) on ExpressKeys</dd><dt>Side Switch Mode: Hover Click</dt><dd>Right Click (lower) / Middle Click (upper) → hover double-click undoes / redoes · tap lower then upper to select and drag with the next tip contact · erase with E or the rear eraser</dd><dt>Upper side switch</dt><dd>Middle Click → hold and drag to scroll</dd><dt>ExpressKeys, if available</dt><dd>Ctrl+Z · Ctrl+Y · V · Tab</dd>';
+    $('#help-wacom-buttons').innerHTML = '<dt>Side Switch Mode: Click & Tap</dt><dd>Lower switch on Right Click → hold and touch or drag to delete · no hover clicks, so put Undo/Redo (Ctrl+Z · Ctrl+Y) on ExpressKeys</dd><dt>Side Switch Mode: Hover Click</dt><dd>Right Click (lower) / Middle Click (upper) → hover double-click undoes / redoes · tap lower then upper quickly, then tap and drag the tip to zoom · erase with E or the rear eraser</dd><dt>Upper side switch</dt><dd>Middle Click → hold and drag to scroll</dd><dt>ExpressKeys, if available</dt><dd>Ctrl+Z · Ctrl+Y · V · Tab</dd>';
     $('#help-space').insertAdjacentHTML('beforeend', '<dt>Close scroll / Quit</dt><dd><kbd>Ctrl+W</kbd> / <kbd>Alt+F4</kbd></dd>');
   }
 }
-let dragNextTip = false, lastPointerType = null;
+let zoomNextTip = false, lastPointerType = null;
+// Zoom by dragging the pen tip: down zooms in, up zooms out; 140 px is a doubling.
+const ZOOM_DRAG_RATE = Math.LN2 / 140;
 let scroll = new Scroll();
 let settings = { color: '#171717', width: 3, paper: 'plain', paperTone: 'ivory' };
 let offsetY = 0, scrollX = 0, scrollZoom = 1, gridZoom = 1;
@@ -164,7 +166,7 @@ function updateControls() {
   document.body.classList.toggle('night', paperTone(settings) === 'night'); updateCursor();
 }
 function setTool(value, explicit = true) {
-  finishGesture(); dragNextTip = false; tool = value; mousePen = value === 'pen' && explicit;
+  finishGesture(); zoomNextTip = false; tool = value; mousePen = value === 'pen' && explicit;
   if (tool !== 'select') selection.clear();
   if (tool !== 'select') diagramSelection = null;
   updateControls(); requestRender();
@@ -172,7 +174,8 @@ function setTool(value, explicit = true) {
 function updateCursor() {
   const pen = lastPointerType === 'pen';
   overlay.style.cursor = ['pan', 'move', 'move-node'].includes(active?.kind) ? 'grabbing'
-    : spaceDown || tool === 'hand' || (pen && dragNextTip) ? 'grab'
+    : spaceDown || tool === 'hand' ? 'grab'
+    : pen && zoomNextTip ? 'zoom-in'
     : tool === 'select' || (tool === 'pen' && !mousePen && !pen) ? 'default' : 'crosshair';
 }
 function setOffset(value, persist = true, x = viewX()) {
@@ -340,8 +343,8 @@ function penShortcut(event) {
     }) : null;
   if (!action || (event.pointerType === 'mouse' && action !== 'redo')) return false;
   finishGesture();
-  if (action === 'drag-next') {
-    dragNextTip = true;
+  if (action === 'zoom-next') {
+    zoomNextTip = true;
     updateCursor();
   } else safely(action);
   return true;
@@ -349,7 +352,7 @@ function penShortcut(event) {
 function eventTool(event) {
   if (spaceDown || (event.buttons & 4)) return 'hand';
   if (event.pointerType === 'pen' && ((event.buttons & 34) || event.button === 5)) return 'eraser';
-  if (event.pointerType === 'pen' && dragNextTip) return 'select';
+  if (event.pointerType === 'pen' && zoomNextTip) return 'zoom';
   if (event.pointerType === 'mouse' && tool === 'pen' && !mousePen) return 'select';
   return tool;
 }
@@ -413,7 +416,7 @@ function pointerDown(event) {
   const currentTool = eventTool(event);
   const barrelErase = currentTool === 'eraser' && barrelDelete(event);
   if (barrelErase ? !event.tipStarted : currentTool !== 'hand' && !contact(event)) return;
-  if (event.tipStarted) dragNextTip = false;
+  if (event.tipStarted) zoomNextTip = false;
   event.preventDefault(); overlay.focus({ preventScroll: true });
   const point = world(event);
   if (gridMode() && startDiagramGesture(currentTool, event, point)) {
@@ -424,6 +427,7 @@ function pointerDown(event) {
     temporary: tool !== 'hand', upper: Boolean(event.buttons & 4), moved: !(event.buttons & 4) || spaceDown,
   };
   else if (currentTool === 'eraser') { scroll.beginGroup(); active = { kind: barrelErase ? 'barrel-erase' : 'erase', pointerId: event.pointerId, changed: false, previous: point }; eraseAt(point); }
+  else if (currentTool === 'zoom') active = { kind: 'zoom', pointerId: event.pointerId, x: event.clientX, y: event.clientY, startZoom: zoomLevel() };
   else if (currentTool === 'shape') active = { kind: 'shape', pointerId: event.pointerId, shape: shapeKind, start: point, current: point, color: settings.color, width: settings.width, penType: settings.penType || 'pen', constrain: event.shiftKey, preview: [] };
   else if (currentTool === 'select') {
     const box = boundsOf(selectedStrokes());
@@ -476,6 +480,7 @@ function pointerMove(event) {
     active.current = world(event); active.constrain = event.shiftKey;
     active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: active.constrain });
   } else if (active.kind === 'pan') updatePan(event);
+  else if (active.kind === 'zoom') zoomAt(active.startZoom * Math.exp((event.clientY - active.y) * ZOOM_DRAG_RATE), active.x, active.y);
   else if (active.kind === 'move') { const point = world(event); active.dx = point.x - active.start.x; active.dy = point.y - active.start.y; }
   else if (active.kind === 'resize') {
     const point = world(event), opposite = active.opposite;
@@ -538,7 +543,7 @@ function handlePointer(rawEvent) {
 }
 for (const type of ['pointerenter', 'pointerdown', 'pointermove', 'pointerup']) overlay.addEventListener(type, handlePointer);
 function resetShortcuts() {
-  penInput.reset(); penShortcuts.reset(); middleClicks.reset(); dragNextTip = false; lastPointerType = null;
+  penInput.reset(); penShortcuts.reset(); middleClicks.reset(); zoomNextTip = false; lastPointerType = null;
 }
 overlay.addEventListener('pointercancel', () => { resetShortcuts(); finishGesture(true); updateCursor(); });
 overlay.addEventListener('lostpointercapture', event => {
@@ -765,7 +770,7 @@ document.addEventListener('keydown', event => {
     else if (key === 'delete' || key === 'backspace') action = 'delete'; else if (key === 'tab') action = 'toggle-toolbar'; else if (key === '?' || key === 'f1') action = 'help'; else if (key === 'f11') action = 'fullscreen'; else if (key === 'home') action = 'home';
     else if (key === ' ') { event.preventDefault(); if (!event.repeat) { finishGesture(); spaceDown = true; updateCursor(); } return; }
     else if (key === 'escape') {
-      event.preventDefault(); if (active) finishGesture(true); else if (dragNextTip) { dragNextTip = false; updateCursor(); } else if (!$('#context-menu').hidden) $('#context-menu').hidden = true;
+      event.preventDefault(); if (active) finishGesture(true); else if (zoomNextTip) { zoomNextTip = false; updateCursor(); } else if (!$('#context-menu').hidden) $('#context-menu').hidden = true;
       else if (selection.size || diagramSelection) { selection.clear(); diagramSelection = null; updateControls(); requestRender(); } else if (!$('#sidebar').hidden) toggleSidebar(false); else bridge.leaveFullscreen(); return;
     } else if (key.startsWith('arrow')) {
       event.preventDefault(); finishGesture(); const amount = event.shiftKey ? 10 : 1;

@@ -13,7 +13,7 @@ The shared `dtp` and `tdtp` definitions, authorization, and installed result app
 - Save scrolls separately and restore open tabs; clearing a scroll is undoable, while deleting it retains a recoverable copy and leaves other scrolls untouched.
 - Reuse the first free default name (Scroll, Scroll 1, …); closed scrolls reserve names and deleted scrolls do not.
 - Keep the writing canvas free of branding; secondary controls collapse into the launcher and hidden sidebar, and dotted paper uses one clear grid without speckled textures.
-- Preserve Wacom mappings: lower button plus fresh tip contact erases on tap or drag, hover double-click undoes, and the middle button pans or hover double-clicks to redo.
+- Pen buttons are a contract (docs/CONTROLS.md, Wacom buttons): lower hold plus tap or drag erases and lower double tap undoes; upper hold plus drag scrolls and upper double tap redoes; lower then upper tapped quickly makes the next tap-and-drag zoom. The Pen button contract tests and pen unit tests must pass in preflight (npm run test:pen runs them alone); change the behavior only on Sean's word, with the doc and tests in the same change.
 - This repository is public: keep credentials, private keys, personal scrolls, local machine configuration, build artifacts, and scratch notes out of Git.
 - Build releases with npm run release:mac -- --sign-only, verify the Developer ID signature and installed app, then tag and push checked main and publish the signed ZIP with its SHA-256 checksum.
 - Build Windows releases with npm run release:win; the NSIS installer is unsigned, so never claim Windows signing, and publish the .exe with its SHA-256 only on explicit request.
