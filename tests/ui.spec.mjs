@@ -77,19 +77,21 @@ function readNativeScroll(file) {
   const database = new DatabaseSync(file, { readOnly: true });
   try {
     expect(database.prepare('PRAGMA quick_check').get().quick_check).toBe('ok');
-    expect(database.prepare('PRAGMA application_id').get().application_id).toBe(0x534d4e44);
+    const grid = file.toLowerCase().endsWith('.smg');
+    expect(database.prepare('PRAGMA application_id').get().application_id).toBe(grid ? 0x534d4752 : 0x534d4e44);
     const schema = database.prepare('PRAGMA user_version').get().user_version;
-    expect([1, 2, 3]).toContain(schema);
+    expect(grid ? [1] : [1, 2, 3, 4]).toContain(schema);
     const metadata = Object.fromEntries(database.prepare('SELECT key, value FROM metadata').all().map(row => [row.key, JSON.parse(row.value)]));
     return {
       version: 1,
-      strokes: database.prepare(`SELECT id, color, width, points, ${schema >= 2 ? 'pen_type' : 'NULL AS pen_type'} FROM strokes ORDER BY order_index`).all().map(row => {
+      strokes: database.prepare(`SELECT id, color, width, points, ${grid || schema >= 2 ? 'pen_type' : 'NULL AS pen_type'} FROM strokes ORDER BY order_index`).all().map(row => {
         const { pen_type, ...stroke } = row;
         return { ...stroke, points: JSON.parse(stroke.points), ...(pen_type == null ? {} : { penType: pen_type }) };
       }),
       markers: database.prepare('SELECT id, y, label, kind FROM markers ORDER BY y, rowid').all().map(row => ({ ...row })),
       view: metadata.view,
       settings: metadata.settings,
+      ...(metadata.diagram?.nodes.length ? { diagram: metadata.diagram } : {}),
     };
   } finally {
     database.close();
@@ -1205,4 +1207,239 @@ test('Highlighter is uniform within a stroke, stacks separate passes, preserves 
   expect((await snapshot()).settings.penType).toBe('pen');
   expect((await snapshot()).settings.color).toBe('#171717');
   expect((await snapshot()).settings.width).toBe(3);
+});
+
+test('mouse selects by default, pen needs Select to move, and middle double-click redoes', async () => {
+	await drag({ x: 380, y: 240 }, { x: 480, y: 240 });
+	expect((await snapshot()).strokes).toHaveLength(0);
+	await pointer('pointerdown', 400, 300);
+	await pointer('pointermove', 510, 300, { button: -1 });
+	await pointer('pointerup', 510, 300, { pressure: 0, buttons: 0 });
+	const original = (await snapshot()).strokes[0];
+	await drag({ x: 456, y: 300 }, { x: 456, y: 360 });
+	expect((await snapshot()).strokes[0].points[0].y).toBe(original.points[0].y + 60);
+
+	await clickPenControl('[data-tool="select"]');
+	await pointer('pointerdown', 456, 360);
+	await pointer('pointermove', 456, 380, { button: -1 });
+	await pointer('pointerup', 456, 380, { pressure: 0, buttons: 0 });
+	const moved = (await snapshot()).strokes[0];
+	expect(moved.points[0].y).toBe(original.points[0].y + 80);
+	await page.keyboard.press(`${modifier}+z`);
+	await page.mouse.click(800, 420, { button: 'middle' });
+	expect((await snapshot()).strokes[0].points[0].y).toBe(original.points[0].y + 60);
+	await page.mouse.click(800, 420, { button: 'middle' });
+	expect((await snapshot()).strokes[0]).toEqual(moved);
+
+	await page.keyboard.press(`${modifier}+z`);
+	await page.mouse.move(800, 420);
+	await page.mouse.down({ button: 'middle' });
+	await page.mouse.move(800, 470);
+	await page.mouse.move(800, 420);
+	await page.mouse.up({ button: 'middle' });
+	await page.mouse.click(800, 420, { button: 'middle' });
+	expect((await snapshot()).strokes[0]).not.toEqual(moved);
+	await page.mouse.click(800, 420, { button: 'middle' });
+	expect((await snapshot()).strokes[0]).toEqual(moved);
+
+	await draw({ x: 560, y: 490 }, { x: 660, y: 490 });
+	expect((await snapshot()).strokes).toHaveLength(2);
+});
+
+test('grid controls, page growth, diagram editing and native persistence work together', async () => {
+	await showSidebar();
+	await page.locator('#paper-tone').selectOption('parchment');
+	await page.locator('#grid-mode').click();
+	await expect(page.locator('#scroll-navigation')).toBeHidden();
+	await expect(page.locator('#grid-settings')).toBeVisible();
+	await expect(page.locator('#paper-tone')).toHaveValue('night');
+	await expect(page.locator('#sidebar h1')).toHaveCSS('color', 'rgb(237, 242, 247)');
+	await expect(page.locator('#clear-scroll')).toHaveCSS('color', 'rgb(255, 174, 167)');
+	for (const [selector, value] of [['#cell-rows', '12'], ['#cell-columns', '15'], ['#block-rows', '2'], ['#block-columns', '2']]) {
+		await page.locator(selector).fill(value);
+		await page.locator(selector).press('Tab');
+	}
+	expect((await snapshot()).settings.grid.cellColumns).toBe(15);
+	await showSidebar(false);
+	const pixel = (x, y) => page.evaluate(([x, y]) => {
+		const context = document.querySelector('#canvas').getContext('2d');
+		return [...context.getImageData(x * devicePixelRatio, y * devicePixelRatio, 1, 1).data];
+	}, [x, y]);
+	await expect.poll(() => pixel(881, 561)).toEqual([23, 44, 64, 255]);
+	await clickPenControl('#diagram-shape');
+	await drag({ x: 320, y: 245 }, { x: 450, y: 335 });
+
+	await openPenControls();
+	await page.locator('#diagram-shape-select').selectOption('cylinder');
+	await drag({ x: 815, y: 390 }, { x: 930, y: 475 });
+	await expect.poll(() => pixel(881, 561)).toEqual([27, 51, 73, 255]);
+	await expect.poll(async () => (await snapshot()).diagram.nodes.map(node => node.kind)).toEqual(['rectangle', 'cylinder']);
+
+	await clickPenControl('#diagram-shape');
+	await page.mouse.click(630, 530);
+	expect((await snapshot()).diagram.nodes.map(node => node.kind)).toEqual(['rectangle', 'cylinder', 'cylinder']);
+
+	await page.mouse.click(390, 286);
+	await drag({ x: 466, y: 290 }, { x: 870, y: 432 });
+	const link = (await snapshot()).diagram.connections[0];
+	expect(link).toMatchObject({ port: 1 });
+	await drag({ x: 860, y: 430 }, { x: 880, y: 490 });
+	const shifted = (await snapshot()).diagram.nodes[1];
+	expect(shifted).toMatchObject({ x: 835, y: 450 });
+	await drag({ x: 950, y: 535 }, { x: 975, y: 550 });
+	expect((await snapshot()).diagram.nodes[1]).toMatchObject({ width: 140, height: 100 });
+	expect((await snapshot()).diagram.connections[0]).toEqual(link);
+	await page.keyboard.press('Delete');
+	expect((await snapshot()).diagram.connections).toHaveLength(0);
+	await page.keyboard.press(`${modifier}+z`);
+	expect((await snapshot()).diagram.connections[0]).toEqual(link);
+
+	await showSidebar();
+	await page.locator('#scroll-mode').click();
+	await expect(page.locator('#paper-tone')).toHaveValue('parchment');
+	await expect(page.locator('#scroll-navigation')).toBeVisible();
+	await page.locator('#grid-mode').click();
+	await showSidebar(false);
+	await page.keyboard.press('ArrowRight');
+	await page.keyboard.press('ArrowDown');
+	const expected = await snapshot();
+	expect(expected.view).toMatchObject({ gridX: 48, gridY: 48 });
+	await showSidebar();
+	await page.locator('#export-sm').click();
+	expect(readNativeScroll(await exportedPath('smg'))).toEqual(expected);
+	await closeGracefully();
+	await launch();
+	expect(await snapshot()).toEqual(expected);
+	await openPenControls();
+	await expect(page.locator('#diagram-shape')).toHaveText('Cylinder');
+});
+
+test('lower then upper moves ink on the next pen tap and restores the normal pen after that drag', async () => {
+	await draw({ x: 380, y: 300 }, { x: 530, y: 300 });
+	const original = (await snapshot()).strokes[0];
+	const hover = async (buttons, button) => {
+		await pointer('pointerdown', 450, 300, { pressure: 0, buttons, button });
+		await pointer('pointerup', 450, 300, { pressure: 0, buttons: 0, button });
+	};
+	await hover(2, 2);
+	await hover(4, 1);
+	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'grab');
+	await pointer('pointerdown', 450, 300);
+	await pointer('pointermove', 475, 350, { button: -1 });
+	await pointer('pointerup', 475, 350, { pressure: 0, buttons: 0 });
+	const moved = (await snapshot()).strokes;
+	expect(moved).toHaveLength(1);
+	expect(moved[0].id).toBe(original.id);
+	expect(moved[0].points[0].x).toBeCloseTo(original.points[0].x + 25);
+	expect(moved[0].points[0].y).toBeCloseTo(original.points[0].y + 50);
+	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+
+	await pointer('pointerdown', 650, 450);
+	await pointer('pointermove', 680, 465, { button: -1 });
+	await pointer('pointerup', 680, 465, { pressure: 0, buttons: 0 });
+	expect((await snapshot()).strokes).toHaveLength(2);
+	expect((await snapshot()).view).toEqual({ offsetY: 0 });
+});
+
+test('Grid accepts pen ink, mixed Wacom barrel erasing, and one-shot shape dragging', async () => {
+	await showSidebar();
+	await page.locator('#grid-mode').click();
+	await expect(page.locator('#sidebar-heading')).toHaveText('Grids');
+	await expect(page.locator('#export-sm')).toHaveText('ScrollMind Grid (.smg)');
+	await showSidebar(false);
+	await pointer('pointermove', 500, 400, { pressure: 0, buttons: 0, button: -1 });
+	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+	await pointer('pointerdown', 500, 400);
+	await pointer('pointermove', 550, 400, { button: -1 });
+	await pointer('pointerup', 550, 400, { pressure: 0, buttons: 0 });
+	const initial = (await snapshot()).strokes;
+	expect(initial).toHaveLength(1);
+
+	const mouse = (type, buttons, button, x, y) => page.evaluate(({ type, buttons, button, x, y }) => {
+		document.querySelector('#overlay').dispatchEvent(new PointerEvent(type, {
+			bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: x, clientY: y, buttons, button,
+		}));
+	}, { type, buttons, button, x, y });
+	await pointer('pointermove', 510, 400, { pressure: 0, buttons: 0, button: -1 });
+	await mouse('pointerdown', 2, 2, 510, 400);
+	expect((await snapshot()).strokes).toEqual(initial);
+	await pointer('pointermove', 510, 400, { pressure: .38, buttons: 0, button: 0 });
+	expect((await snapshot()).strokes).toHaveLength(0);
+	await pointer('pointermove', 510, 400, { pressure: 0, buttons: 0, button: 0 });
+	await mouse('pointerup', 0, 2, 510, 400);
+	await page.keyboard.press(`${modifier}+z`);
+	expect((await snapshot()).strokes).toEqual(initial);
+
+	await clickPenControl('#diagram-shape');
+	await pointer('pointerdown', 575, 435);
+	await pointer('pointermove', 725, 555, { button: -1 });
+	await pointer('pointerup', 725, 555, { pressure: 0, buttons: 0 });
+	const shape = (await snapshot()).diagram.nodes[0];
+	await pointer('pointermove', 640, 495, { pressure: 0, buttons: 0, button: -1 });
+	await mouse('pointerdown', 2, 2, 640, 495);
+	await mouse('pointerup', 0, 2, 640, 495);
+	await pointer('pointerdown', 640, 495, { pressure: 0, buttons: 4, button: 1 });
+	await pointer('pointerup', 640, 495, { pressure: 0, buttons: 0, button: 1 });
+	await pointer('pointerdown', 640, 495);
+	await pointer('pointermove', 700, 525, { button: -1 });
+	await pointer('pointerup', 700, 525, { pressure: 0, buttons: 0 });
+	expect((await snapshot()).diagram.nodes[0]).toEqual({ ...shape, x: shape.x + 60, y: shape.y + 30 });
+	expect((await snapshot()).strokes).toEqual(initial);
+
+	await showSidebar();
+	await page.locator('#scroll-mode').click();
+	await expect(page.locator('#scroll-mode')).toHaveAttribute('aria-pressed', 'true');
+	expect((await snapshot()).strokes).toHaveLength(0);
+	expect((await snapshot()).diagram).toBeUndefined();
+	await page.locator('#grid-mode').click();
+	await expect(page.locator('#grid-mode')).toHaveAttribute('aria-pressed', 'true');
+	expect((await snapshot()).strokes).toEqual(initial);
+
+	await page.locator('#zoom-in').click();
+	await expect(page.locator('#zoom-reset')).toHaveText('125%');
+	await page.locator('#zoom-reset').click();
+	await expect(page.locator('#zoom-reset')).toHaveText('100%');
+	await showSidebar(false);
+	await page.locator('#overlay').dispatchEvent('wheel', { ctrlKey: true, deltaY: -80, clientX: 500, clientY: 400 });
+	expect((await snapshot()).view.gridZoom).toBeGreaterThan(1);
+});
+
+test('macOS Edit menu places working Redo immediately after Undo', async () => {
+	test.skip(process.platform !== 'darwin');
+	await draw({ x: 400, y: 300 }, { x: 520, y: 300 });
+	const strokes = (await snapshot()).strokes;
+	const labels = await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.find(item => item.label === 'Edit').submenu.items.map(item => item.label));
+	expect(labels.slice(0, 2)).toEqual(['Undo', 'Redo']);
+	for (const [label, expected] of [['Undo', []], ['Redo', strokes]]) {
+		await app.evaluate(({ Menu }, label) => {
+			Menu.getApplicationMenu().items.find(item => item.label === 'Edit').submenu.items.find(item => item.label === label).click();
+		}, label);
+		await expect.poll(async () => (await snapshot()).strokes).toEqual(expected);
+	}
+});
+
+test('the pen bar edits and restores named palettes per document', async () => {
+	await openPenControls();
+	await page.locator('#color-wheel-toggle').click();
+	await page.locator('#palette-slot').selectOption('2');
+	const hex = page.getByLabel('Hex color', { exact: true });
+	await hex.fill('#2a917b');
+	await hex.press('Tab');
+	await page.locator('#palette-name').fill('Shallows');
+	await page.locator('#palette-save').click();
+	expect((await snapshot()).settings.palette[2]).toEqual({ name: 'Shallows', color: '#2a917b' });
+	await expect(page.getByRole('button', { name: 'Shallows ink', exact: true })).toHaveAttribute('data-color', '#2a917b');
+	await showSidebar();
+	await page.locator('#grid-mode').click();
+	await expect(page.locator('#grid-mode')).toHaveAttribute('aria-pressed', 'true');
+	expect((await snapshot()).settings.palette).toBeUndefined();
+	await page.locator('#scroll-mode').click();
+	await expect(page.locator('#scroll-mode')).toHaveAttribute('aria-pressed', 'true');
+	expect((await snapshot()).settings.palette[2]).toEqual({ name: 'Shallows', color: '#2a917b' });
+	await showSidebar(false);
+	await openPenControls();
+	if (await page.locator('#color-picker').isHidden()) await page.locator('#color-wheel-toggle').click();
+	await page.locator('#palette-reset').click();
+	expect((await snapshot()).settings.palette).toBeUndefined();
+	await expect(page.getByRole('button', { name: 'Blue ink', exact: true })).toHaveAttribute('data-color', '#215b9c');
 });

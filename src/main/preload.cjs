@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('scrollmind', Object.freeze({
   exportDocument: (format, options) => ipcRenderer.invoke('scroll:export', format, options),
   openDocument: () => ipcRenderer.invoke('scroll:open'),
   workspaceState: () => ipcRenderer.invoke('workspace:state'),
+  switchWorkspace: kind => ipcRenderer.invoke('workspace:switch', kind),
   newScroll: (options) => ipcRenderer.invoke('workspace:new', options),
   selectScroll: (id) => ipcRenderer.invoke('workspace:select', id),
   closeScroll: (id) => ipcRenderer.invoke('workspace:close', id),

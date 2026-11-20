@@ -14,18 +14,18 @@ function createDocumentIO({ getStore, getWindow, dataDirectory, testing }) {
     return result;
   };
 
-  async function destination(format) {
+  async function destination(format, title) {
     if (testing) {
       if (!process.env.SCROLLMIND_EXPORT_DIR) return null;
       await fs.mkdir(process.env.SCROLLMIND_EXPORT_DIR, { recursive: true });
-      return path.join(process.env.SCROLLMIND_EXPORT_DIR, `Scroll.${format}`);
+      return path.join(process.env.SCROLLMIND_EXPORT_DIR, `${title}.${format}`);
     }
-    const names = { sm: 'ScrollMind Scroll', svg: 'SVG Drawing', pdf: 'PDF Document' };
+    const names = { sm: 'ScrollMind Scroll', smg: 'ScrollMind Grid', svg: 'SVG Drawing', pdf: 'PDF Document' };
     const exportDirectory = path.join(dataDirectory, 'Exports');
     await fs.mkdir(exportDirectory, { recursive: true });
     const result = await dialog.showSaveDialog(getWindow(), {
       title: `Export ${names[format]}`,
-      defaultPath: path.join(exportDirectory, `Scroll.${format}`),
+      defaultPath: path.join(exportDirectory, `${title}.${format}`),
       filters: [{ name: names[format], extensions: [format] }],
       properties: ['createDirectory', 'showOverwriteConfirmation'],
     });
@@ -87,13 +87,15 @@ function createDocumentIO({ getStore, getWindow, dataDirectory, testing }) {
 
   function exportDocument(format, options = {}) {
     return serialize(async () => {
-      if (!['sm', 'svg', 'pdf'].includes(format)) throw new TypeError('Choose ScrollMind, SVG, or PDF export.');
-      const file = await destination(format);
-      if (!file) return { canceled: true };
+      if (!['sm', 'smg', 'svg', 'pdf'].includes(format)) throw new TypeError('Choose ScrollMind, SVG, or PDF export.');
       const store = getStore();
+      const grid = store.workspaceState().kind === 'grid';
+      if (format === 'sm' || format === 'smg') format = grid ? 'smg' : 'sm';
+      const file = await destination(format, grid ? 'Grid' : 'Scroll');
+      if (!file) return { canceled: true };
       if (store.assertExportDestination) await store.assertExportDestination(file);
       await store.flush();
-      if (format === 'sm') await store.exportFile(file);
+      if (format === 'sm' || format === 'smg') await store.exportFile(file);
       else {
         const { exportSVG, exportPDFHTML } = await import('../core/export.mjs');
         const document = await store.getSnapshot();
@@ -111,7 +113,7 @@ function createDocumentIO({ getStore, getWindow, dataDirectory, testing }) {
       if (!file && testing) file = process.env.SCROLLMIND_OPEN_PATH;
       if (!file && !testing) {
         const result = await dialog.showOpenDialog(getWindow(), {
-          title: 'Open Scroll', filters: [{ name: 'ScrollMind Scroll', extensions: ['sm'] }], properties: ['openFile'],
+          title: 'Open Scroll or Grid', filters: [{ name: 'ScrollMind documents', extensions: ['sm', 'smg'] }], properties: ['openFile'],
         });
         if (result.canceled) return { canceled: true };
         file = result.filePaths[0];

@@ -2,17 +2,22 @@ const DELETE_BUTTON = 2;
 const SCROLL_BUTTON = 4;
 const CONTACT_BUTTONS = 1 | 32;
 const MAX_CLICK_DURATION = 250;
-const DOUBLE_CLICK_WINDOW = 400;
-const MAX_MOVEMENT = 8;
+const PEN_CLICK_WINDOW = 400;
+const DRAG_SEQUENCE_WINDOW = 700;
+export const PEN_CLICK_MOVEMENT = 8;
 
 /** Recognize intentional hovering pen-button double-clicks without treating taps or pans as shortcuts. */
 export class PenButtonShortcuts {
   #pointers = new Map();
   #candidate = null;
   #pressureContact;
+  #navigation;
 
   // pressureContact: treat any pressure above zero as tip contact (Windows Ink reports barrel plus tip as button 2 with pressure).
-  constructor({ pressureContact = false } = {}) { this.#pressureContact = Boolean(pressureContact); }
+  constructor({ pressureContact = false, navigation = false } = {}) {
+    this.#pressureContact = pressureContact;
+    this.#navigation = navigation;
+  }
 
   reset() {
     this.#pointers.clear();
@@ -40,7 +45,10 @@ export class PenButtonShortcuts {
       this.reset();
       state = null;
     }
-    if (this.#candidate && now - this.#candidate.time > DOUBLE_CLICK_WINDOW) this.#candidate = null;
+    if (this.#candidate) {
+      const window = this.#navigation && this.#candidate.button === DELETE_BUTTON ? DRAG_SEQUENCE_WINDOW : PEN_CLICK_WINDOW;
+      if (now - this.#candidate.time > window) this.#candidate = null;
+    }
     if (!state) {
       // A move received after entering the canvas can already have a button held.
       // Only a down event can establish the first observed press without prior state.
@@ -62,7 +70,7 @@ export class PenButtonShortcuts {
     let action = null;
     if (state.press) {
       const press = state.press;
-      if (pressed || (buttons & ~press.button) || Math.hypot(x - press.x, y - press.y) > MAX_MOVEMENT
+      if (pressed || (buttons & ~press.button) || Math.hypot(x - press.x, y - press.y) > PEN_CLICK_MOVEMENT
         || now - press.time > MAX_CLICK_DURATION) {
         press.valid = false;
         this.#candidate = null;
@@ -70,26 +78,23 @@ export class PenButtonShortcuts {
       if (!(buttons & press.button)) {
         state.press = null;
         if (press.valid && buttons === 0) {
-          if (this.#candidate?.pointerId === pointerId && this.#candidate.button === press.button
-            && now - this.#candidate.time <= DOUBLE_CLICK_WINDOW) {
-            action = press.button === DELETE_BUTTON ? 'undo' : 'redo';
+          const prior = this.#candidate?.pointerId === pointerId ? this.#candidate.button : null;
+          const doubleClick = prior === press.button && now - this.#candidate.time <= PEN_CLICK_WINDOW;
+          const dragSequence = this.#navigation && prior === DELETE_BUTTON && press.button === SCROLL_BUTTON;
+          if (doubleClick || dragSequence) {
+            action = dragSequence ? 'drag-next' : press.button === DELETE_BUTTON ? 'undo' : 'redo';
             this.#candidate = null;
-          } else this.#candidate = { pointerId, button: press.button, time: now };
+          } else {
+            this.#candidate = { pointerId, button: press.button, time: now };
+          }
         }
       }
     }
     if (cleanButton && !(previous & cleanButton) && !state.press) {
-      if (this.#candidate && (this.#candidate.pointerId !== pointerId || this.#candidate.button !== cleanButton)) this.#candidate = null;
+      if (this.#candidate && (this.#candidate.pointerId !== pointerId || this.#candidate.button !== cleanButton
+        && !(this.#navigation && this.#candidate.button === DELETE_BUTTON && cleanButton === SCROLL_BUTTON))) this.#candidate = null;
       state.press = { button: cleanButton, time: now, x, y, valid: !pressed };
     }
     return action;
   }
-}
-
-/** Windows drivers send a hovering barrel click as mouse input; map it to the pen button it stands for. */
-export function penButtonFromHoverMouse(event, penInRange) {
-  if (!penInRange || event?.pointerType !== 'mouse' || !['pointerdown', 'pointerup'].includes(event.type)) return null;
-  const mapped = event.button === 2 ? 2 : event.button === 1 ? 4 : 0;
-  if (!mapped) return null;
-  return { type: event.type, pointerType: 'pen', pointerId: -2, buttons: event.type === 'pointerdown' ? mapped : 0, clientX: event.clientX, clientY: event.clientY, pressure: 0 };
 }

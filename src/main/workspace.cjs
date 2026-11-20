@@ -3,7 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { createStore } = require('./storage.cjs');
+const { createStore, formatFor } = require('./storage.cjs');
 
 const VERSION = 1;
 const MAX_SCROLLS = 1000;
@@ -133,10 +133,14 @@ async function resolvedDestination(file) {
 }
 
 function createWorkspace(directory, options = {}) {
+  const { name, ext } = formatFor(options.kind);
+  const title = name[0].toUpperCase() + name.slice(1);
+  const primary = `${name}.${ext}`, backup = `${name}.backup.${ext}`;
+  const nativeFiles = [primary, backup, `${primary}-wal`, `${primary}-shm`];
   const manifestPath = path.join(directory, 'workspace.json');
   const manifestBackupPath = path.join(directory, 'workspace.backup.json');
-  const scrollsDirectory = path.join(directory, 'Scrolls');
-  const deletedDirectory = path.join(directory, 'Deleted Scrolls');
+  const scrollsDirectory = path.join(directory, name === 'grid' ? 'Items' : 'Scrolls');
+  const deletedDirectory = path.join(directory, `Deleted ${title}s`);
   const stores = new Map();
   let manifest;
   let loaded = false;
@@ -225,15 +229,15 @@ function createWorkspace(directory, options = {}) {
     let number = 1;
     for (const folder of folders.sort((a, b) => a.name.localeCompare(b.name))) {
       if (!folder.isDirectory() || !UUID.test(folder.name) || known.has(folder.name) || next.scrolls.length >= MAX_SCROLLS) continue;
-      const file = path.join(scrollsDirectory, folder.name, 'scroll.sm');
+      const file = path.join(scrollsDirectory, folder.name, primary);
       try {
         if (!(await fs.lstat(file)).isFile()) continue;
         await reader.importFile(file);
       } catch { continue; } // Preserve malformed/future files for manual recovery.
-      while (names.has(`Recovered scroll ${number}`)) number++;
-      const name = `Recovered scroll ${number++}`;
-      next.scrolls.push({ id: folder.name, name, open: true });
-      names.add(name);
+      while (names.has(`Recovered ${name} ${number}`)) number++;
+      const recoveredName = `Recovered ${name} ${number++}`;
+      next.scrolls.push({ id: folder.name, name: recoveredName, open: true });
+      names.add(recoveredName);
     }
     if (next.scrolls.length === manifest.scrolls.length) return false;
     await persist(next);
@@ -247,7 +251,7 @@ function createWorkspace(directory, options = {}) {
     if (typeof value.deletedAt !== 'string' || !Number.isFinite(Date.parse(value.deletedAt))) throw new Error('A deleted scroll recovery record has an invalid date.');
     const replacement = value.replacement;
     if (!replacement || typeof replacement !== 'object') throw new Error('A deleted scroll recovery record has no replacement scroll.');
-    const scrolls = replacement.id === 'main' ? [replacement] : [{ id: 'main', name: 'Scroll 1', open: false }, replacement];
+    const scrolls = replacement.id === 'main' ? [replacement] : [{ id: 'main', name: options.kind === 'grid' ? 'Grid' : 'Scroll 1', open: false }, replacement];
     const normalized = validateManifest({ version: VERSION, activeId: replacement.id, scrolls });
     return { version: 1, id: value.id, name, deletedAt: value.deletedAt, archiveId, replacement: normalized.scrolls.find((scroll) => scroll.id === replacement.id) };
   }
@@ -271,7 +275,7 @@ function createWorkspace(directory, options = {}) {
 
   async function moveDeletedOriginals(record) {
     const archive = path.join(deletedDirectory, record.archiveId);
-    const names = ['scroll.sm', 'scroll.backup.sm', 'scroll.sm-wal', 'scroll.sm-shm'];
+    const names = nativeFiles;
     let prefix = 'original-';
     for (const name of names) if (await exists(path.join(archive, `${prefix}${name}`))) { prefix = `original-${crypto.randomUUID()}-`; break; }
     for (const name of names) {
@@ -331,7 +335,7 @@ function createWorkspace(directory, options = {}) {
             manifest = restored; recovered = true;
           } catch (backupError) {
             if (error.code !== 'ENOENT' || backupError.code !== 'ENOENT') throw backupError;
-            manifest = { version: VERSION, activeId: 'main', scrolls: [{ id: 'main', name: 'Scroll 1', open: true }] };
+            manifest = { version: VERSION, activeId: 'main', scrolls: [{ id: 'main', name: name === 'grid' ? 'Grid' : 'Scroll 1', open: true }] };
             await persist(manifest);
           }
         }
@@ -348,8 +352,8 @@ function createWorkspace(directory, options = {}) {
 
   function availableScrollName(ignoredId) {
     const used = new Set(manifest.scrolls.filter((scroll) => !scroll.deleted && scroll.id !== ignoredId).map((scroll) => scroll.name.trim().toLowerCase()));
-    if (!used.has('scroll')) return 'Scroll';
-    for (let number = 1; ; number++) if (!used.has(`scroll ${number}`)) return `Scroll ${number}`;
+    if (!used.has(name)) return title;
+    for (let number = 1; ; number++) if (!used.has(`${name} ${number}`)) return `${title} ${number}`;
   }
 
   async function prepareNewScroll({ name, document, settings, sourcePath } = {}, ignoredNameId) {
@@ -358,7 +362,10 @@ function createWorkspace(directory, options = {}) {
     const nextDescriptor = { id, name: validName(name === undefined ? availableScrollName(ignoredNameId) : name), open: true, ...(sourcePath ? { sourcePath } : {}) };
     const { store } = await ensureStore(id);
     if (document !== undefined) await store.save(document);
-    else if (settings !== undefined) await store.saveChanges({ settings, view: { offsetY: 0 } });
+    else if (settings !== undefined) {
+      const { palette, ...defaults } = settings;
+      await store.saveChanges({ settings: defaults, view: { offsetY: 0 } });
+    }
     return { descriptor: nextDescriptor, document: await store.getSnapshot() };
   }
 
@@ -463,7 +470,7 @@ function createWorkspace(directory, options = {}) {
       await store.close();
       stores.get(id).loaded = false;
       // Keep originals in place until a complete recoverable archive is durable.
-      for (const name of ['scroll.sm', 'scroll.backup.sm', 'scroll.sm-wal', 'scroll.sm-shm']) {
+      for (const name of nativeFiles) {
         const source = path.join(storeDirectory(id), name);
         if (!(await exists(source))) continue;
         const copy = path.join(pending, name);
@@ -486,7 +493,6 @@ function createWorkspace(directory, options = {}) {
   }
 
   async function assertExportDestination(destination) {
-    requireWorkspace();
     if (typeof destination !== 'string' || !destination) throw new TypeError('Choose an export file.');
     const resolved = await resolvedDestination(destination);
     for (const folder of [scrollsDirectory, deletedDirectory]) {
@@ -495,12 +501,12 @@ function createWorkspace(directory, options = {}) {
       if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) throw new Error('Choose an export file outside the managed scroll folders.');
     }
     const protectedFiles = [manifestPath, manifestBackupPath, path.join(directory, 'notebook.scrollmind.json'), path.join(directory, 'notebook.backup.json')];
-    for (const id of new Set(['main', ...manifest.scrolls.map((scroll) => scroll.id), ...stores.keys()])) {
-      const base = path.join(storeDirectory(id), 'scroll.sm');
-      protectedFiles.push(base, path.join(storeDirectory(id), 'scroll.backup.sm'), `${base}-wal`, `${base}-shm`);
+    for (const id of new Set(['main', ...(manifest?.scrolls ?? []).map((scroll) => scroll.id), ...stores.keys()])) {
+      const base = path.join(storeDirectory(id), primary);
+      protectedFiles.push(base, path.join(storeDirectory(id), backup), `${base}-wal`, `${base}-shm`);
     }
-    for (const scroll of manifest.scrolls.filter((item) => item.deleted && item.archiveId)) {
-      for (const name of ['scroll.sm', 'scroll.backup.sm', 'deletion.json', 'original-scroll.sm', 'original-scroll.backup.sm']) protectedFiles.push(path.join(deletedDirectory, scroll.archiveId, name));
+    for (const scroll of (manifest?.scrolls ?? []).filter((item) => item.deleted && item.archiveId)) {
+      for (const name of [primary, backup, 'deletion.json', `original-${primary}`, `original-${backup}`]) protectedFiles.push(path.join(deletedDirectory, scroll.archiveId, name));
     }
     for (const protectedFile of protectedFiles) {
       if (resolved.toLowerCase() === (await resolvedDestination(protectedFile)).toLowerCase()) throw new Error('Choose a different export file so your workspace scrolls stay safe.');
@@ -512,16 +518,16 @@ function createWorkspace(directory, options = {}) {
     return destination;
   }
 
-  function openScroll(sourcePath) {
+  function openScroll(sourcePath, converted) {
     return enqueue(async () => {
       requireWorkspace();
       if (typeof sourcePath !== 'string' || !sourcePath) throw new TypeError('Choose a ScrollMind scroll to open.');
       const source = await fs.realpath(sourcePath);
-      const known = manifest.scrolls.find((scroll) => !scroll.deleted && ((scroll.sourcePath && scroll.sourcePath.toLowerCase() === source.toLowerCase()) || path.resolve(storeDirectory(scroll.id), 'scroll.sm').toLowerCase() === source.toLowerCase()));
+      const known = manifest.scrolls.find((scroll) => !scroll.deleted && ((scroll.sourcePath && scroll.sourcePath.toLowerCase() === source.toLowerCase()) || path.resolve(storeDirectory(scroll.id), primary).toLowerCase() === source.toLowerCase()));
       if (known) return selectInternal(known.id);
-      const document = await (await activeStore()).importFile(source);
-      const importedName = path.basename(sourcePath, path.extname(sourcePath)).replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 80) || 'Imported scroll';
-      const prepared = await prepareNewScroll({ name: importedName, document, sourcePath: source });
+      const document = converted?.document ?? await (await activeStore()).importFile(source);
+      const importedName = path.basename(sourcePath, path.extname(sourcePath)).replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 80) || `Imported ${name}`;
+      const prepared = await prepareNewScroll({ name: converted ? converted.name : importedName, document, sourcePath: source });
       const next = structuredClone(manifest);
       next.activeId = prepared.descriptor.id;
       next.scrolls.push(prepared.descriptor);
@@ -555,9 +561,9 @@ function createWorkspace(directory, options = {}) {
     load, save, saveChanges, getSnapshot, importFile, exportFile, backup: exportFile,
     flush, close, newScroll, selectScroll, closeScroll, deleteScroll, renameScroll, openScroll, workspaceState,
     assertExportDestination: file => enqueue(() => assertExportDestination(file)),
-    get filePath() { return path.join(storeDirectory(manifest?.activeId || 'main'), 'scroll.sm'); },
-    get backupPath() { return path.join(storeDirectory(manifest?.activeId || 'main'), 'scroll.backup.sm'); },
+    get filePath() { return path.join(storeDirectory(manifest?.activeId || 'main'), primary); },
+    get backupPath() { return path.join(storeDirectory(manifest?.activeId || 'main'), backup); },
   };
 }
 
-module.exports = { createWorkspace };
+module.exports = { createWorkspace, atomicWrite };

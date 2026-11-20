@@ -10,7 +10,7 @@
 <body>
   <main aria-label="Infinite writing page">
     <canvas id="canvas" aria-hidden="true"></canvas>
-    <canvas id="overlay" tabindex="0" aria-label="Writing canvas. B pen, V rectangular selection, E eraser, H hand. Space and drag to scroll."></canvas>
+    <canvas id="overlay" tabindex="0" aria-label="Writing canvas. The mouse selects and the pen writes by default. B pen, V selection, E eraser, H hand. Space and drag to pan."></canvas>
   </main>
   <div id="chrome">
     <button id="sidebar-toggle" class="round floating" title="Sections & paper (⌘ /)" aria-label="Open sidebar" aria-expanded="false"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M5.5 8h1M5.5 11h1"/></svg></button>
@@ -18,13 +18,17 @@
     <button id="pen-controls-toggle" class="floating" aria-label="Pen controls" aria-expanded="false" aria-controls="toolbar" title="Pen controls · hover to open"><svg viewBox="0 0 24 24"><path d="m5 16-1 4 4-1L20 7l-3-3L5 16ZM14 7l3 3M5 16l3 3"/></svg></button>
     <nav id="toolbar" class="floating" aria-label="Pen toolbar" hidden>
       <div class="tools" role="group" aria-label="Tools">
-        <button data-tool="pen" title="Pen (B)" aria-label="Pen" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="m5 16-1 4 4-1L20 7l-3-3L5 16ZM14 7l3 3M5 16l3 3"/></svg></button>
+        <button data-tool="pen" title="Pen (B) · enable mouse drawing" aria-label="Pen" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="m5 16-1 4 4-1L20 7l-3-3L5 16ZM14 7l3 3M5 16l3 3"/></svg></button>
         <button data-tool="eraser" title="Eraser (E)" aria-label="Eraser" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="m4 14 9-10a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3L12 20H8l-4-4a1.5 1.5 0 0 1 0-2ZM10 8l8 8M12 20h9"/></svg></button>
         <button data-tool="select" title="Rectangle selection (V)" aria-label="Rectangular selection" aria-pressed="false"><svg viewBox="0 0 24 24"><path stroke-dasharray="3 3" d="M4 4h16v16H4Z"/><path d="m14 13 1 8 2-3 3-1Z"/></svg></button>
         <button data-tool="hand" title="Hand (H) · hold Space to pan" aria-label="Hand" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M8 12V6a1.5 1.5 0 0 1 3 0v5-7a1.5 1.5 0 0 1 3 0v7-6a1.5 1.5 0 0 1 3 0v7-4a1.5 1.5 0 0 1 3 0v7c0 4-3 7-7 7-3 0-4-2-6-4l-3-4a1.5 1.5 0 0 1 2-2l2 1Z"/></svg></button>
       </div>
       <select id="pen-type" aria-label="Pen type" title="Pen type"><option value="pen">Pen</option><option value="pencil">Pencil</option><option value="fountain">Fountain</option><option value="marker">Marker</option><option value="highlighter">Highlighter</option></select>
       <select id="shape-select" aria-label="Shape" title="Basic shapes · hold Shift to constrain"><option value="">Shapes</option><option value="line">Line</option><option value="arrow">Arrow</option><option value="rectangle">Rectangle</option><option value="ellipse">Ellipse</option><option value="triangle">Triangle</option></select>
+      <div id="grid-shapes" role="group" aria-label="Flowchart shapes" hidden>
+        <button id="diagram-shape" aria-pressed="false" title="Draw the last selected shape">Rectangle</button>
+        <select id="diagram-shape-select" aria-label="Choose a flowchart shape"><option value="" hidden>▾</option><option value="rectangle">Rectangle</option><option value="ellipse">Oval</option><option value="triangle">Triangle</option><option value="trapezoid">Trapezoid</option><option value="cylinder">Cylinder</option></select>
+      </div>
       <span class="separator"></span>
       <div id="colors" class="colors" role="group" aria-label="Ink color">
         <button data-color="#171717" class="swatch black" title="Black" aria-label="Black ink" aria-pressed="true"></button>
@@ -35,7 +39,7 @@
         <button data-color="#d67b2a" class="swatch orange" title="Orange" aria-label="Orange ink" aria-pressed="false"></button>
         <button data-color="#8055a5" class="swatch purple" title="Purple" aria-label="Purple ink" aria-pressed="false"></button>
         <button data-color="#ffffff" class="swatch white" title="White" aria-label="White ink" aria-pressed="false"></button>
-        <button id="color-wheel-toggle" title="Color palette wheel" aria-label="Color palette wheel" aria-expanded="false" aria-controls="color-picker"><span class="wheel-icon"></span></button>
+        <button id="color-wheel-toggle" title="Color palette and wheel" aria-label="Color palette and wheel" aria-expanded="false" aria-controls="color-picker"><span class="wheel-icon"></span></button>
       </div>
       <span class="separator"></span>
       <div class="widths" role="group" aria-label="Pen size">
@@ -48,29 +52,62 @@
       <button id="undo" title="Undo (⌘ Z)" aria-label="Undo" disabled><svg viewBox="0 0 24 24"><path d="m9 6-5 5 5 5M4 11h10a6 6 0 0 1 6 6"/></svg></button>
       <button id="redo" title="Redo (⇧ ⌘ Z)" aria-label="Redo" disabled><svg viewBox="0 0 24 24"><path d="m15 6 5 5-5 5M20 11H10a6 6 0 0 0-6 6"/></svg></button>
     </nav>
-    <section id="color-picker" class="floating" aria-label="Choose ink color" hidden>
+    <section id="color-picker" class="floating" aria-label="Ink color and document palette" hidden>
       <canvas id="color-wheel" width="220" height="220" tabindex="0" role="slider" aria-label="Color wheel" aria-valuemin="0" aria-valuemax="360" aria-valuenow="0"></canvas>
       <label for="color-value">Brightness</label><input id="color-value" type="range" min="0" max="100" value="100">
       <div class="hex-row"><span id="chosen-color" aria-hidden="true"></span><label for="color-hex">Hex color</label><input id="color-hex" type="text" maxlength="7" value="#171717" spellcheck="false" aria-label="Hex color"></div>
+      <div id="palette-editor">
+        <div class="palette-field"><label for="palette-slot">Swatch</label><select id="palette-slot"></select></div>
+        <div class="palette-field"><label for="palette-name">Name</label><input id="palette-name" maxlength="32" autocomplete="off"></div>
+        <div class="palette-actions"><button id="palette-save" type="button">Save current color</button><button id="palette-reset" type="button">Reset palette</button></div>
+      </div>
     </section>
     </div>
   </div>
   <aside id="sidebar" hidden aria-label="Sections and paper">
-    <header><div><p class="eyebrow">YOUR SCROLL</p><h1>Find your place.</h1></div><button id="sidebar-close" class="round" aria-label="Close sidebar">×</button></header>
+    <header><h1 id="sidebar-heading">Scrolls</h1><button id="sidebar-close" class="round" aria-label="Close sidebar">×</button></header>
     <div class="sidebar-body">
-      <section class="scrolls-panel"><div class="sidebar-section-title"><h2>Open scrolls</h2><button id="new-scroll" title="New Scroll (⌘ N)">+ New</button></div><div id="scroll-list"></div><details id="closed-scrolls" hidden><summary>Other scrolls</summary><div id="closed-scroll-list"></div></details></section>
+      <div class="canvas-mode" role="group" aria-label="Workspace">
+        <button id="scroll-mode" aria-pressed="true">Scrolls</button>
+        <button id="grid-mode" aria-pressed="false">Grids</button>
+      </div>
+      <div class="canvas-zoom" role="group" aria-label="Canvas zoom">
+        <button id="zoom-out" aria-label="Zoom out" title="Zoom out (⌘ −)">−</button>
+        <button id="zoom-reset" aria-label="Reset zoom to 100%" title="Actual size">100%</button>
+        <button id="zoom-in" aria-label="Zoom in" title="Zoom in (⌘ +)">+</button>
+      </div>
+      <section class="scrolls-panel"><div class="sidebar-section-title"><h2 id="open-documents-title">Open scrolls</h2><button id="new-scroll" title="New Scroll (⌘ N)">+ New</button></div><div id="scroll-list"></div><details id="closed-scrolls" hidden><summary>Other scrolls</summary><div id="closed-scroll-list"></div></details></section>
+      <section id="scroll-navigation">
       <button id="start-link" class="start-link">↑ &nbsp; Start of scroll</button>
       <div class="sidebar-section-title"><h2>Sections & markers</h2><span id="marker-count">0</span></div>
       <div id="markers"></div>
       <p id="markers-empty" class="quiet">Keep a place for every thought. Add a section, a page break, or a simple marker.</p>
       <div class="add-buttons"><button id="add-section">+ Section</button><button id="add-marker">+ Marker</button><button id="add-page-break">+ Page break</button></div>
       <p class="quiet small">Added at the middle of your view.</p>
+      </section>
+      <section id="grid-settings" hidden>
+        <h2>Grid layout</h2>
+        <fieldset>
+          <legend>Squares per block</legend>
+          <div class="grid-dimensions">
+            <label>Rows<input id="cell-rows" data-grid-size="cellRows" type="number" min="1" max="100" step="1" aria-label="Square rows per block"></label>
+            <label>Columns<input id="cell-columns" data-grid-size="cellColumns" type="number" min="1" max="100" step="1" aria-label="Square columns per block"></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Blocks per page</legend>
+          <div class="grid-dimensions">
+            <label>Rows<input id="block-rows" data-grid-size="blockRows" type="number" min="1" max="100" step="1" aria-label="Block rows per page"></label>
+            <label>Columns<input id="block-columns" data-grid-size="blockColumns" type="number" min="1" max="100" step="1" aria-label="Block columns per page"></label>
+          </div>
+        </fieldset>
+      </section>
       <section class="paper-settings"><h2>Make it your paper</h2>
         <label for="paper-tone">Paper</label><select id="paper-tone"><option value="ivory">Soft ivory</option><option value="parchment">Warm parchment</option><option value="white">Clean white</option><option value="night">Midnight blue</option></select>
-        <label for="paper-pattern">Ruling</label><select id="paper-pattern"><option value="plain">Plain</option><option value="dots">Dot grid</option><option value="ruled">Ruled</option><option value="grid">Square grid</option></select>
+        <div id="paper-ruling"><label for="paper-pattern">Ruling</label><select id="paper-pattern"><option value="plain">Plain</option><option value="dots">Dot grid</option><option value="ruled">Ruled</option><option value="grid">Square grid</option></select></div>
       </section>
       <section class="display-settings"><label for="display-select">Writing screen</label><select id="display-select" aria-label="Writing screen"></select></section>
-      <section class="scroll-files"><h2>Scroll file</h2><button id="open-sm" title="Open Scroll (⌘ O)">Open Scroll…</button><p class="file-label">Export Scroll</p><div class="export-buttons"><button id="export-sm" title="Export ScrollMind file (⇧ ⌘ S)">ScrollMind (.sm)</button><button id="export-svg">SVG</button><button id="export-pdf" title="Export PDF (⌘ P)">PDF</button></div><button id="clear-scroll" class="danger" title="Remove all ink, sections, page breaks, and markers. Undo restores them.">Clear current scroll</button></section>
+      <section class="scroll-files"><h2 id="file-title">Scroll file</h2><button id="open-sm" title="Open Scroll or Grid (⌘ O)">Open…</button><p class="file-label" id="export-label">Export Scroll</p><div class="export-buttons"><button id="export-sm" title="Export ScrollMind file (⇧ ⌘ S)">ScrollMind (.sm)</button><button id="export-svg">SVG</button><button id="export-pdf" title="Export PDF (⌘ P)">PDF</button></div><button id="clear-scroll" class="danger" title="Remove all ink, diagrams, and navigation points. Undo restores them.">Clear current scroll</button></section>
       <div class="sidebar-links"><button id="home" title="Back to start (⌘ 0)">Back to start</button><button id="fullscreen" title="Full screen (⇧ ⌘ F)">Toggle full screen</button><button id="data-folder">Open saved scrolls ↗</button><button id="controls-link">Keyboard & Wacom controls</button></div>
       <div class="sidebar-status"><span id="selection-hint"></span><span id="status" role="status" aria-live="polite">Opening…</span></div>
       <p class="quiet small" id="version">ScrollMind</p>
@@ -78,7 +115,7 @@
   </aside>
   <button id="save-alert" role="alert" aria-live="assertive" hidden></button>
   <div id="context-menu" role="menu" hidden><button data-command="cut" role="menuitem">Cut <kbd>⌘ X</kbd></button><button data-command="copy" role="menuitem">Copy <kbd>⌘ C</kbd></button><button data-command="paste" role="menuitem">Paste <kbd>⌘ V</kbd></button><button data-command="duplicate" role="menuitem">Duplicate <kbd>⌘ D</kbd></button><button data-command="delete" role="menuitem">Delete <kbd>⌫</kbd></button></div>
-  <dialog id="help"><button id="help-close" class="round" aria-label="Close help">×</button><p class="eyebrow">A LITTLE ROOM TO THINK</p><h1>Just you and the page.</h1><p class="help-intro">Write with the pen. Arrange with the mouse. Keep going in either direction.</p><div class="help-columns"><section><h2>Write & move</h2><dl><dt>Pen / Eraser</dt><dd><kbd>B</kbd> / <kbd>E</kbd></dd><dt>Rectangle selection</dt><dd><kbd>V</kbd></dd><dt>Scroll</dt><dd>Wheel or <kbd>Space</kbd> + drag</dd><dt>Move selected strokes</dt><dd>Drag inside the box</dd><dt>Resize selection</dt><dd>Drag a corner · <kbd>⇧</kbd> keeps shape</dd><dt>Nudge</dt><dd>Arrow keys · <kbd>⇧</kbd> for 10px</dd><dt>Copy / Cut / Paste</dt><dd><kbd>⌘ C</kbd> / <kbd>⌘ X</kbd> / <kbd>⌘ V</kbd></dd><dt>Duplicate / Select all</dt><dd><kbd>⌘ D</kbd> / <kbd>⌘ A</kbd></dd><dt>Undo / Redo</dt><dd><kbd>⌘ Z</kbd> / <kbd>⇧ ⌘ Z</kbd></dd></dl></section><section><h2>Your Wacom</h2><p id="help-wacom-intro">The tip writes with pressure. For a pen with two side buttons, sensible Wacom driver assignments are:</p><dl id="help-wacom-buttons"><dt>Lower side button</dt><dd>Right click → hold + touch or drag to delete · double-click to undo</dd><dt>Upper side button</dt><dd>Middle click → hold to scroll · double-click to redo</dd><dt>ExpressKeys, if available</dt><dd>Undo · Redo · V · Tab</dd></dl><p class="quiet">Button names follow the assignments in your Wacom driver. The app doesn’t change those assignments.</p><h2>Give yourself space</h2><dl id="help-space"><dt>Sidebar / Toolbar</dt><dd><kbd>⌘ /</kbd> / <kbd>Tab</kbd></dd><dt>Back to start</dt><dd><kbd>⌘ 0</kbd></dd><dt>Full screen</dt><dd><kbd id="help-fullscreen">⇧ ⌘ F</kbd> · <kbd>Esc</kbd> to leave</dd><dt>Add marker / Page break</dt><dd><kbd>⌘ ⇧ M</kbd> / <kbd>⌘ Enter</kbd></dd></dl></section></div><p class="help-foot">Saved automatically in Documents / ScrollMind. No account. No cloud.</p></dialog>
+  <dialog id="help"><button id="help-close" class="round" aria-label="Close help">×</button><p class="eyebrow">A LITTLE ROOM TO THINK</p><h1>Just you and the page.</h1><p class="help-intro">Write with the pen. Arrange with the mouse. Keep going in either direction.</p><div class="help-columns"><section><h2>Write & move</h2><dl><dt>Pen / Eraser</dt><dd><kbd>B</kbd> / <kbd>E</kbd></dd><dt>Rectangle selection</dt><dd><kbd>V</kbd></dd><dt>Pan</dt><dd>Wheel or <kbd>Space</kbd> + drag</dd><dt>Zoom</dt><dd>Ctrl + wheel, trackpad pinch, or sidebar zoom controls</dd><dt>Move selected strokes</dt><dd>Drag inside the box</dd><dt>Resize selection</dt><dd>Drag a corner · <kbd>⇧</kbd> keeps shape</dd><dt>Nudge</dt><dd>Arrow keys · <kbd>⇧</kbd> for 10px</dd><dt>Copy / Cut / Paste</dt><dd><kbd>⌘ C</kbd> / <kbd>⌘ X</kbd> / <kbd>⌘ V</kbd></dd><dt>Duplicate / Select all</dt><dd><kbd>⌘ D</kbd> / <kbd>⌘ A</kbd></dd><dt>Undo / Redo</dt><dd><kbd>⌘ Z</kbd> / <kbd>⇧ ⌘ Z</kbd></dd></dl></section><section><h2>Your Wacom</h2><p id="help-wacom-intro">The tip writes with pressure. For a pen with two side buttons, sensible Wacom driver assignments are:</p><dl id="help-wacom-buttons"><dt>Lower side button</dt><dd>Right click → hold + touch or drag to delete · double-click to undo</dd><dt>Upper side button</dt><dd>Middle click → hold to scroll · double-click to redo</dd><dt>Drag with the next tip contact</dt><dd>Tap lower, then upper, while hovering</dd><dt>ExpressKeys, if available</dt><dd>Undo · Redo · V · Tab</dd></dl><p class="quiet">Button names follow the assignments in your Wacom driver. The app doesn’t change those assignments.</p><h2>Give yourself space</h2><dl id="help-space"><dt>Sidebar / Toolbar</dt><dd><kbd>⌘ /</kbd> / <kbd>Tab</kbd></dd><dt>Back to start</dt><dd><kbd>⌘ 0</kbd></dd><dt>Full screen</dt><dd><kbd id="help-fullscreen">⇧ ⌘ F</kbd> · <kbd>Esc</kbd> to leave</dd><dt>Add marker / Page break</dt><dd><kbd>⌘ ⇧ M</kbd> / <kbd>⌘ Enter</kbd></dd></dl></section></div><p class="help-foot">Saved automatically in Documents / ScrollMind. No account. No cloud.</p></dialog>
   <script type="module" src="app.mjs"></script>
 </body>
 </html>

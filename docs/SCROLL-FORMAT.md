@@ -1,6 +1,6 @@
-# Native scroll format
+# Native Scroll and Grid formats
 
-An **.sm** file is a SQLite database containing editable ink, paper settings, the saved view, and navigation points. Use **Export Scroll** to create a standalone file for sharing or backup. Working files can have SQLite WAL companions; exported .sm files include their committed contents without depending on those companions.
+A **.sm** file is a ScrollMind Scroll database with editable ink, paper settings, the saved view, and navigation points. A **.smg** file is a ScrollMind Grid database with editable ink, shapes, connections, Grid settings, and its saved view. Export either document for sharing or backup. Working databases may have SQLite WAL companions. Exports include the committed contents.
 
 ## Files on disk
 
@@ -12,13 +12,17 @@ ScrollMind keeps its data in `~/Documents/ScrollMind` (`Documents\ScrollMind` on
 | `Scrolls/<id>/scroll.sm` | Additional working scrolls |
 | `scroll.backup.sm` beside each working file | Recovery snapshot |
 | `workspace.json` | Scroll names, open/closed state, and active scroll |
-| `Deleted Scrolls/<archive-id>/` | Recoverable deleted scroll and deletion record |
+| `Deleted Scrolls/<archive-id>/` | Recoverable deleted Scroll and deletion record |
+| `Grids/grid.smg`, `Grids/Items/<id>/grid.smg` | Working Grids with adjacent `grid.backup.smg` files |
+| `Grids/workspace.json` | Grid list, open/closed state, and active Grid |
+| `Grids/Deleted Grids/<archive-id>/` | Recoverable deleted Grid and deletion record |
+| `active-workspace` | Most recently viewed workspace |
 
-Recovery snapshots refresh at startup, first writing, every five minutes, and clean close. Corrupt files are preserved during recovery. Saves are flushed to disk (fsync through writable handles on Windows) and files are replaced by renames, which NTFS journals. Opening an external .sm creates a managed working copy and leaves the source unchanged. Earlier JSON saves migrate automatically, preserving their originals.
+Recovery snapshots refresh at startup, first writing, every five minutes, and clean close. Corrupt files are preserved during recovery. Saves are flushed to disk (fsync through writable handles on Windows) and files are replaced by renames, which NTFS journals. Opening an external .sm or .smg creates a managed working copy and leaves the source file intact. Earlier JSON saves migrate automatically, preserving their originals.
 
 ## Schema
 
-The SQLite application ID is `0x534d4e44` (`SMND`), and `PRAGMA user_version` is **3**. The portable document version remains **1**.
+Scrolls use SQLite application ID `0x534d4e44` (`SMND`) and schema **4**. Grids use application ID `0x534d4752` (`SMGR`) and schema **1**. Both use the following SQLite tables and portable document version **1**.
 
 | Table | Columns |
 | --- | --- |
@@ -30,10 +34,12 @@ Stroke points are JSON arrays of `{x,y,p}` objects. Coordinates are signed world
 
 `pen_type` is `pen`, `pencil`, `fountain`, `marker`, or `highlighter`. An explicit `pen` uses the current brush. SQL `NULL` maps to an absent document `penType` field and preserves legacy ink appearance. Settings can separately store the selected `penType`. Highlighter transparency is a brush property; native files retain the original stroke color and point data.
 
-Marker kinds are `section`, `page-break`, and `marker`. Metadata stores `view` and `settings` as JSON, including paper, color, width, and selected pen style when present.
+Marker kinds are `section`, `page-break`, and `marker`. Metadata stores `view` and `settings` as JSON, including paper, color, width, and selected pen style when present. Grid settings store the cell and block counts, grid paper color, and the last picked shape. Each document records its own pan and zoom. An optional `settings.palette` stores eight named six-digit hex colors in pen bar order.
+
+The optional `diagram` metadata stores `nodes` with shape IDs, types, bounds and colors, plus `connections` with source and target shape IDs and the source handle index. The renderer derives routes from the current shapes, so moving a shape needs to update only its bounds. Grid page extents are derived from ink and diagram bounds.
 
 ## Compatibility
 
-Schema 1 and 2 files remain valid read-only import sources. Managed files upgrade transactionally, adding nullable `pen_type` with default `NULL` for schema 1 while preserving existing point JSON and legacy styles. Schema 3 adds Highlighter support without changing the schema 2 columns. New exports and refreshed backups use schema 3 so older readers reject unsupported pen styles without treating the file as damaged.
+Schema 1–3 files remain valid read-only import sources. Managed files upgrade transactionally, adding nullable `pen_type` with default `NULL` for schema 1 while preserving existing point JSON and legacy styles. Schema 3 added Highlighter support. Scroll schema 4 supports zoom. Earlier Grid previews stored hybrid documents in Scroll schema 4. When opening one, the app saves a separate Grid with the ink, shapes, and Grid settings, then removes the Grid fields from the managed Scroll. The Scroll keeps its ink and navigation points.
 
-Unsupported future versions are rejected and preserved. Native exports use SQLite's backup API and a rollback journal to produce an independent .sm file.
+Unsupported future versions are rejected and preserved. Native exports use SQLite's backup API and a rollback journal to produce independent .sm and .smg files.

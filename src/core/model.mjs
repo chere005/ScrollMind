@@ -1,6 +1,8 @@
+import { normalizePalette } from './palette.mjs';
 // The scroll contains only portable data. Drawing and filesystem APIs live elsewhere.
 import { brushWidth, maxBrushWidth, brushCap } from './brushes.mjs';
 import { strokeGeometry, geometryHitsPoint, geometryIntersectsRect } from './stroke-geometry.mjs';
+import { DEFAULT_GRID, GRID_LIMIT, DIAGRAM_SHAPES } from './grid.mjs';
 
 const VERSION = 1;
 const BUCKET_HEIGHT = 1024;
@@ -12,6 +14,10 @@ const MAX_TOTAL_POINTS = 5_000_000;
 const MAX_COORDINATE = 1_000_000_000;
 const MAX_HISTORY = 500;
 const MAX_MARKERS = 10_000;
+const DIAGRAM_LIMIT = 2000;
+const EMPTY_DIAGRAM = Object.freeze({ nodes: Object.freeze([]), connections: Object.freeze([]) });
+export const MIN_ZOOM = .25;
+export const MAX_ZOOM = 4;
 const DEFAULT_SETTINGS = Object.freeze({ color: '#171717', width: 3, paper: 'plain', paperTone: 'ivory' });
 const PAPERS = new Set(['plain', 'dots', 'ruled', 'grid']);
 const PAPER_TONES = new Set(['ivory', 'parchment', 'white', 'night']);
@@ -44,18 +50,84 @@ function normalizeSettings(value = {}) {
   const paperTone = value.paperTone ?? DEFAULT_SETTINGS.paperTone;
   if (!PAPER_TONES.has(paperTone)) throw new TypeError('Unknown paper tone.');
   if (value.penType !== undefined) brushCap(value.penType);
+  if (value.mode !== undefined && !['scroll', 'grid'].includes(value.mode)) throw new TypeError('Unknown canvas mode.');
+  let grid;
+  if (value.grid !== undefined || value.mode === 'grid') {
+    if (value.grid !== undefined && !record(value.grid)) throw new TypeError('Grid settings must be an object.');
+    grid = { ...DEFAULT_GRID };
+    for (const name of ['cellRows', 'cellColumns', 'blockRows', 'blockColumns']) {
+      grid[name] = value.grid?.[name] ?? grid[name];
+      if (!Number.isInteger(grid[name]) || grid[name] < 1 || grid[name] > GRID_LIMIT) throw new TypeError(`Grid sizes must be whole numbers from 1 to ${GRID_LIMIT}.`);
+    }
+    grid.paperTone = value.grid?.paperTone ?? grid.paperTone;
+    if (!PAPER_TONES.has(grid.paperTone)) throw new TypeError('Unknown grid paper tone.');
+    if (value.grid?.shape !== undefined) {
+      if (typeof value.grid.shape !== 'string' || !Object.hasOwn(DIAGRAM_SHAPES, value.grid.shape)) throw new TypeError('Unknown diagram shape.');
+      grid.shape = value.grid.shape;
+    }
+  }
   return {
     color: color(value.color ?? DEFAULT_SETTINGS.color),
     width: finite(value.width ?? DEFAULT_SETTINGS.width, 'Pen width', 0.01, 1000),
     paper,
     paperTone,
     ...(value.penType !== undefined ? { penType: value.penType } : {}),
+    ...(value.mode === 'grid' ? { mode: 'grid' } : {}),
+    ...(grid ? { grid } : {}),
+    ...(value.palette !== undefined ? { palette: normalizePalette(value.palette) } : {}),
   };
 }
 
 function normalizeView(value = {}) {
   if (!record(value)) throw new TypeError('Scroll view must be an object.');
-  return { offsetY: finite(value.offsetY ?? 0, 'Vertical position') };
+  const view = { offsetY: finite(value.offsetY ?? 0, 'Vertical position') };
+  for (const name of ['scrollX', 'gridX', 'gridY']) {
+    const offset = finite(value[name] ?? 0, 'Canvas position');
+    if (offset) view[name] = offset;
+  }
+  for (const name of ['scrollZoom', 'gridZoom']) {
+    const zoom = finite(value[name] ?? 1, 'Canvas scale', MIN_ZOOM, MAX_ZOOM);
+    if (zoom !== 1) view[name] = zoom;
+  }
+  return view;
+}
+
+function diagramId(id) {
+  if (typeof id !== 'string' || !id.length || id.length > 128) throw new TypeError('Invalid diagram ID.');
+  return id;
+}
+
+function validateNode(node) {
+  if (!record(node) || typeof node.kind !== 'string' || !Object.hasOwn(DIAGRAM_SHAPES, node.kind)) throw new TypeError('Unknown diagram shape.');
+  const { id, kind, x, y, width, height } = node;
+  finite(x, 'Shape x'); finite(y, 'Shape y');
+  finite(width, 'Shape width', 8, MAX_COORDINATE); finite(height, 'Shape height', 8, MAX_COORDINATE);
+  finite(x + width, 'Shape right edge'); finite(y + height, 'Shape bottom edge');
+  return Object.freeze({ id: diagramId(id), kind, x, y, width, height, color: color(node.color) });
+}
+
+function validateConnection(connection, nodes) {
+  if (!record(connection)) throw new TypeError('A connection must be an object.');
+  const { id, from, to, port } = connection;
+  if (from === to || !nodes.has(from) || !nodes.has(to)) throw new TypeError('A connection needs two different shapes.');
+  if (!Number.isInteger(port) || port < 0 || port > 3) throw new TypeError('Invalid connection handle.');
+  return Object.freeze({ id: diagramId(id), from, to, port });
+}
+
+function validateDiagram(value = EMPTY_DIAGRAM) {
+  if (!record(value) || ![value.nodes, value.connections].every(items => Array.isArray(items) && items.length <= DIAGRAM_LIMIT)) {
+    throw new TypeError(`A diagram supports up to ${DIAGRAM_LIMIT} shapes and ${DIAGRAM_LIMIT} connections.`);
+  }
+  if (!value.nodes.length && !value.connections.length) return EMPTY_DIAGRAM;
+  const nodes = value.nodes.map(validateNode);
+  const ids = new Set(nodes.map(node => node.id));
+  if (ids.size !== nodes.length) throw new TypeError('Duplicate shape IDs are not allowed.');
+  const connections = value.connections.map(connection => validateConnection(connection, ids));
+  for (const connection of connections) {
+    if (ids.has(connection.id)) throw new TypeError('Duplicate diagram IDs are not allowed.');
+    ids.add(connection.id);
+  }
+  return Object.freeze({ nodes: Object.freeze(nodes), connections: Object.freeze(connections) });
 }
 
 function validateStroke(value) {
@@ -121,12 +193,14 @@ function validateMarkers(value = []) {
 export function validateSnapshot(value) {
   if (!record(value)) throw new TypeError('A scroll must be an object.');
   if (value.version !== VERSION) throw new TypeError(`Unsupported scroll version: ${String(value.version)}.`);
+  const diagram = validateDiagram(value.diagram);
   return {
     version: VERSION,
     strokes: validateStrokes(value.strokes),
     markers: validateMarkers(value.markers),
     view: normalizeView(value.view),
     settings: normalizeSettings(value.settings),
+    ...(diagram !== EMPTY_DIAGRAM ? { diagram } : {}),
   };
 }
 
@@ -345,6 +419,8 @@ export class Notebook {
   #dirtyStrokes = new Map();
   #orderChangedAt = 0;
   #markersChangedAt = 0;
+  #diagramChangedAt = 0;
+  #diagram = EMPTY_DIAGRAM;
   #highestOrder = -1;
 
   constructor(snapshot = {}) {
@@ -354,6 +430,7 @@ export class Notebook {
       this.#put(stroke.id, { stroke: immutable(stroke), order: this.#nextOrder++ });
     }
     for (const marker of validated.markers) this.#markers.set(marker.id, Object.freeze(marker));
+    this.#diagram = validated.diagram ?? EMPTY_DIAGRAM;
     this.#tracking = true;
   }
 
@@ -363,6 +440,7 @@ export class Notebook {
   }
 
   get(id) { return this.#entries.get(id)?.stroke; }
+  get diagram() { return this.#diagram; }
   get markers() {
     this.#orderedMarkers ??= Object.freeze([...this.#markers.values()].sort((a, b) => a.y - b.y));
     return this.#orderedMarkers;
@@ -384,6 +462,7 @@ export class Notebook {
       removals,
       ...(this.#orderChangedAt ? { order: this.strokes.map(stroke => stroke.id) } : {}),
       ...(this.#markersChangedAt ? { markers: [...this.markers] } : {}),
+      ...(this.#diagramChangedAt ? { diagram: this.#diagram } : {}),
     };
   }
 
@@ -392,6 +471,7 @@ export class Notebook {
     for (const [id, changedAt] of this.#dirtyStrokes) if (changedAt <= token) this.#dirtyStrokes.delete(id);
     if (this.#orderChangedAt <= token) this.#orderChangedAt = 0;
     if (this.#markersChangedAt <= token) this.#markersChangedAt = 0;
+    if (this.#diagramChangedAt <= token) this.#diagramChangedAt = 0;
   }
 
   #index(id, stroke, add) {
@@ -475,7 +555,49 @@ export class Notebook {
       else this.#markers.delete(patch.id);
       this.#orderedMarkers = null;
       this.#markersChangedAt = ++this.#changeToken;
+    } else if (patch.kind === 'diagram') {
+      this.#diagram = patch[direction];
+      this.#diagramChangedAt = ++this.#changeToken;
     } else this.#put(patch.id, patch[direction]);
+  }
+
+  #replaceDiagram(nodes, connections) {
+    const after = nodes.length || connections.length ? Object.freeze({ nodes: Object.freeze(nodes), connections: Object.freeze(connections) }) : EMPTY_DIAGRAM;
+    return this.#remember([{ kind: 'diagram', id: '', before: this.#diagram, after }]);
+  }
+
+  addShape(shape) {
+    const { nodes, connections } = this.#diagram;
+    if (nodes.length >= DIAGRAM_LIMIT) throw new TypeError('The diagram contains too many shapes.');
+    const node = validateNode({ ...shape, id: globalThis.crypto.randomUUID() });
+    this.#replaceDiagram([...nodes, node], connections);
+    return node.id;
+  }
+
+  updateShape(id, box) {
+    const { nodes, connections } = this.#diagram;
+    const before = nodes.find(node => node.id === id);
+    if (!before) return false;
+    const { x, y, width, height } = box;
+    if (before.x === x && before.y === y && before.width === width && before.height === height) return false;
+    const after = validateNode({ ...before, x, y, width, height });
+    return this.#replaceDiagram(nodes.map(node => node === before ? after : node), connections);
+  }
+
+  connectShapes(from, to, port) {
+    const { nodes, connections } = this.#diagram;
+    if (connections.length >= DIAGRAM_LIMIT) throw new TypeError('The diagram contains too many connections.');
+    if (connections.some(link => link.from === from && link.to === to && link.port === port)) return false;
+    const connection = validateConnection({ id: globalThis.crypto.randomUUID(), from, to, port }, new Set(nodes.map(node => node.id)));
+    return this.#replaceDiagram(nodes, [...connections, connection]);
+  }
+
+  removeDiagramItem(id) {
+    const { nodes, connections } = this.#diagram;
+    const nextNodes = nodes.filter(node => node.id !== id);
+    const nextConnections = connections.filter(link => link.id !== id && link.from !== id && link.to !== id);
+    if (nextNodes.length === nodes.length && nextConnections.length === connections.length) return false;
+    return this.#replaceDiagram(nextNodes, nextConnections);
   }
 
   addMarker(value) {
@@ -518,11 +640,12 @@ export class Notebook {
 
   /** Clear ink and every marker as a single reversible edit. */
   clear() {
-    if (!this.#entries.size && !this.#markers.size) return false;
+    if (!this.#entries.size && !this.#markers.size && this.#diagram === EMPTY_DIAGRAM) return false;
     this.beginGroup();
     try {
       this.remove([...this.#entries.keys()]);
       for (const id of [...this.#markers.keys()]) this.removeMarker(id);
+      if (this.#diagram !== EMPTY_DIAGRAM) this.#replaceDiagram([], []);
     } finally { this.endGroup(); }
     return true;
   }
@@ -596,6 +719,7 @@ export class Notebook {
   }
 
   snapshot(view = {}, settings = {}) {
-    return { version: VERSION, strokes: [...this.strokes], markers: [...this.markers], view: normalizeView(view), settings: normalizeSettings(settings) };
+    return { version: VERSION, strokes: [...this.strokes], markers: [...this.markers], view: normalizeView(view), settings: normalizeSettings(settings),
+      ...(this.#diagram !== EMPTY_DIAGRAM ? { diagram: this.#diagram } : {}) };
   }
 }

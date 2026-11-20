@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PenButtonShortcuts, penButtonFromHoverMouse } from '../src/core/pen-shortcuts.mjs';
+import { PenButtonShortcuts } from '../src/core/pen-shortcuts.mjs';
 
 const event = (type, buttons, extra = {}) => ({ type, buttons, pointerType: 'pen', pointerId: 44, clientX: 100, clientY: 100, pressure: 0.5, ...extra });
 function click(shortcuts, button, start, { duration = 40, pointerId = 44, type = 'pointerdown', releaseType = 'pointerup', x = 100, y = 100 } = {}) {
@@ -178,23 +178,23 @@ test('default constructor still treats pressured button 2 as a hover press', () 
   assert.equal(tap(100), 'undo');
 });
 
-test('hover mouse clicks map to pen buttons only while the pen is in range', () => {
-  const mouse = (type, button) => ({ type, pointerType: 'mouse', button, clientX: 5, clientY: 6 });
-  assert.equal(penButtonFromHoverMouse(mouse('pointerdown', 2), false), null);
-  assert.equal(penButtonFromHoverMouse(mouse('pointermove', 2), true), null);
-  assert.equal(penButtonFromHoverMouse(mouse('pointerdown', 0), true), null);
-  assert.equal(penButtonFromHoverMouse({ ...mouse('pointerdown', 2), pointerType: 'pen' }, true), null);
-  assert.equal(penButtonFromHoverMouse(mouse('pointerdown', 2), true).buttons, 2);
-  assert.equal(penButtonFromHoverMouse(mouse('pointerdown', 1), true).buttons, 4);
-  assert.equal(penButtonFromHoverMouse(mouse('pointerup', 1), true).buttons, 0);
-  const shortcuts = new PenButtonShortcuts();
-  const press = (button, start) => {
-    shortcuts.update(penButtonFromHoverMouse(mouse('pointerdown', button), true), start);
-    return shortcuts.update(penButtonFromHoverMouse(mouse('pointerup', button), true), start + 40);
-  };
-  assert.equal(press(2, 0), null);
-  assert.equal(press(2, 200), 'undo');
-  assert.equal(press(1, 1000), null);
-  assert.equal(press(1, 1200), 'redo');
-  assert.equal(press(2, 3000), null, 'a single click does nothing');
+test('lower then upper arms one drag, while lower double-click and upper double-click retain history actions', () => {
+	const shortcuts = new PenButtonShortcuts({ navigation: true });
+	assert.deepEqual([[2, 0], [4, 100], [4, 650], [4, 750], [2, 1300], [2, 1400]]
+		.map(([button, time]) => click(shortcuts, button, time)), [null, 'drag-next', null, 'redo', null, 'undo']);
+
+	click(shortcuts, 2, 2100);
+	shortcuts.update(event('pointerdown', 4), 2200);
+	shortcuts.update(event('pointermove', 4, { clientY: 125 }), 2220);
+	shortcuts.update(event('pointermove', 4), 2240);
+	assert.equal(shortcuts.update(event('pointerup', 0), 2260), null);
+	assert.equal(click(shortcuts, 4, 2400), null);
+	assert.equal(click(shortcuts, 2, 2500), null);
+});
+
+test('the ordered drag shortcut allows a longer pause without changing the undo double-click interval', () => {
+	const shortcuts = new PenButtonShortcuts({ navigation: true });
+	assert.equal(click(shortcuts, 2, 0), null);
+	assert.equal(click(shortcuts, 2, 500), null);
+	assert.equal(click(shortcuts, 4, 1100), 'drag-next');
 });

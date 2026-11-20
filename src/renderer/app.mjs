@@ -1,10 +1,14 @@
-import { Notebook as Scroll, boundsOf, makeStroke, strokeHitsPoint, strokeIntersectsRect, validateStrokes } from '../core/model.mjs';
-import { PenButtonShortcuts, penButtonFromHoverMouse } from '../core/pen-shortcuts.mjs';
+import { Notebook as Scroll, MIN_ZOOM, MAX_ZOOM, boundsOf, makeStroke, strokeHitsPoint, strokeIntersectsRect, validateStrokes } from '../core/model.mjs';
+import { PEN_CLICK_MOVEMENT, PenButtonShortcuts } from '../core/pen-shortcuts.mjs';
+import { PenInput } from '../core/pen-input.mjs';
 import { makeShape } from '../core/shapes.mjs';
 import { brushWidth, brushCap, brushOpacity } from '../core/brushes.mjs';
 import { strokeGeometry } from '../core/stroke-geometry.mjs';
 import { createPenControls } from './pen-controls.mjs';
 import { localizeShortcut } from '../core/shortcut-labels.mjs';
+import { DEFAULT_GRID, GRID_LIMIT, DIAGRAM_SHAPES, diagramBounds, diagramRoutes, gridBounds, routeConnection, shapePorts } from '../core/grid.mjs';
+import { TONES as tones, paperTone, inkOnPaper } from '../core/paper.mjs';
+import { paintGrid, paintDiagram, paintShapeHandles, diagramHit, drawShapeBox, resizeShapeBox } from './grid-canvas.mjs';
 
 const $ = selector => document.querySelector(selector);
 const bridge = window.scrollmind;
@@ -22,14 +26,16 @@ if (platform !== 'darwin') {
     const full = $('#help-fullscreen'); if (full) full.textContent = 'Ctrl+Shift+F or F11';
     // The Wacom help describes macOS driver wording; on Windows it describes Windows Ink and the driver's side-switch assignments.
     $('#help-wacom-intro').textContent = 'The tip writes with pressure. In the Wacom driver, turn on Windows Ink, then set the pen side switches:';
-    $('#help-wacom-buttons').innerHTML = '<dt>Side Switch Mode: Click & Tap</dt><dd>Lower switch on Right Click → hold and touch or drag to delete · no hover clicks, so put Undo/Redo (Ctrl+Z · Ctrl+Y) on ExpressKeys</dd><dt>Side Switch Mode: Hover Click</dt><dd>Right Click (lower) / Middle Click (upper) → hover double-click undoes / redoes · erase with E or the rear eraser</dd><dt>Upper side switch</dt><dd>Middle Click → hold and drag to scroll</dd><dt>ExpressKeys, if available</dt><dd>Ctrl+Z · Ctrl+Y · V · Tab</dd>';
+    $('#help-wacom-buttons').innerHTML = '<dt>Side Switch Mode: Click & Tap</dt><dd>Lower switch on Right Click → hold and touch or drag to delete · no hover clicks, so put Undo/Redo (Ctrl+Z · Ctrl+Y) on ExpressKeys</dd><dt>Side Switch Mode: Hover Click</dt><dd>Right Click (lower) / Middle Click (upper) → hover double-click undoes / redoes · tap lower then upper to select and drag with the next tip contact · erase with E or the rear eraser</dd><dt>Upper side switch</dt><dd>Middle Click → hold and drag to scroll</dd><dt>ExpressKeys, if available</dt><dd>Ctrl+Z · Ctrl+Y · V · Tab</dd>';
     $('#help-space').insertAdjacentHTML('beforeend', '<dt>Close scroll / Quit</dt><dd><kbd>Ctrl+W</kbd> / <kbd>Alt+F4</kbd></dd>');
   }
 }
-let lastPenAt = 0, penHoverAt = -Infinity;
+let dragNextTip = false, lastPointerType = null;
 let scroll = new Scroll();
 let settings = { color: '#171717', width: 3, paper: 'plain', paperTone: 'ivory' };
-let offsetY = 0, tool = 'pen', selection = new Set(), active = null;
+let offsetY = 0, scrollX = 0, gridX = 0, gridY = 0, scrollZoom = 1, gridZoom = 1;
+let tool = 'pen', mousePen = false, selection = new Set(), active = null;
+let diagramSelection = null;
 let spaceDown = false, loaded = false, loadError = null;
 let width = innerWidth, height = innerHeight, ratio = devicePixelRatio || 1;
 let revision = 0, savedRevision = 0, saveTimer, savePromise, frame, baseDirty = true;
@@ -37,24 +43,51 @@ let pasteCount = 0, clipboardSource = '';
 let fileOperation = null;
 let clipboardQueue = Promise.resolve();
 let nativeFileQueue = Promise.resolve();
-const penButtons = new Map();
-const penShortcuts = new PenButtonShortcuts({ pressureContact: windowsPen });
-let workspace = { activeId: null, scrolls: [] };
+const penInput = new PenInput({ windowsInk: windowsPen });
+const penShortcuts = new PenButtonShortcuts({ navigation: true });
+const middleClicks = new PenButtonShortcuts();
+let workspace = { kind: 'scroll', activeId: null, scrolls: [] };
 let shapeKind = 'rectangle';
 const scrollSessions = new Map();
 let brushStyles = { ink: null, highlighter: null };
 const paintedPaths = new WeakMap();
 const penControls = createPenControls({
   onColor(color) { finishGesture(); settings.color = color; changed(); },
+  onPalette(palette) {
+    if (palette) settings.palette = palette;
+    else delete settings.palette;
+    changed();
+  },
   focusCanvas() { overlay.focus({ preventScroll: true }); },
 });
-const tones = {
-  ivory: { background: '#faf8f2', line: '#c5c6bc', dot: '#a1a49a', marker: '#71879a' },
-  parchment: { background: '#f1e9d8', line: '#b9ae98', dot: '#9f947d', marker: '#8a7e69' },
-  white: { background: '#ffffff', line: '#c4cdd5', dot: '#9da9b2', marker: '#71879a' },
-  night: { background: '#172c40', line: '#47637b', dot: '#6787a3', marker: '#89a9c5' },
-};
-function snapshot() { return scroll.snapshot({ offsetY }, settings); }
+const gridMode = () => workspace.kind === 'grid';
+const documentTitle = () => gridMode() ? 'Grid' : 'Scroll';
+const sessionKey = (state = workspace, id = state.activeId) => state.kind + ':' + id;
+const viewX = () => gridMode() ? gridX : scrollX;
+const viewY = () => gridMode() ? gridY : offsetY;
+const zoomLevel = () => gridMode() ? gridZoom : scrollZoom;
+const viewWidth = () => width / zoomLevel();
+const viewHeight = () => height / zoomLevel();
+const savedView = () => ({ offsetY, scrollX, gridX, gridY, scrollZoom, gridZoom });
+const gridSettings = () => settings.grid ?? DEFAULT_GRID;
+const diagramShape = () => gridSettings().shape ?? 'rectangle';
+const gridInputs = [...document.querySelectorAll('[data-grid-size]')];
+let cachedDiagram, cachedRoutes, cachedStrokes, cachedInkBounds;
+function liveRoutes() {
+  if (cachedDiagram !== scroll.diagram) {
+    cachedDiagram = scroll.diagram;
+    cachedRoutes = diagramRoutes(cachedDiagram);
+  }
+  return cachedRoutes;
+}
+function inkBounds() {
+  if (cachedStrokes !== scroll.strokes) {
+    cachedStrokes = scroll.strokes;
+    cachedInkBounds = boundsOf(cachedStrokes);
+  }
+  return cachedInkBounds;
+}
+function snapshot() { return scroll.snapshot(savedView(), settings); }
 function message(text, error = false) {
   status.textContent = text;
   status.classList.toggle('error', error);
@@ -75,7 +108,7 @@ async function flushSave() {
     while (savedRevision < revision) {
       const writingRevision = revision;
       const { token, ...changes } = scroll.pendingChanges();
-      await bridge.saveChanges({ ...changes, view: { offsetY }, settings, scrollId: workspace.activeId });
+      await bridge.saveChanges({ ...changes, view: savedView(), settings, scrollId: workspace.activeId, documentKind: workspace.kind });
       scroll.acknowledgeChanges(token);
       savedRevision = writingRevision;
     }
@@ -88,25 +121,71 @@ async function flushSave() {
 function selectedStrokes() { return [...selection].map(id => scroll.get(id)).filter(Boolean); }
 function updateControls() {
   selection = new Set([...selection].filter(id => scroll.get(id)));
+  if (diagramSelection && ![...scroll.diagram.nodes, ...scroll.diagram.connections].some(item => item.id === diagramSelection)) diagramSelection = null;
   $('#undo').disabled = !scroll.canUndo; $('#redo').disabled = !scroll.canRedo;
   document.querySelectorAll('[data-tool]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tool === tool)));
-  const paletteColor = ['#243746', '#242a35'].includes(settings.color.toLowerCase()) ? settings.paperTone === 'night' ? '#ffffff' : '#171717' : settings.color.toLowerCase();
+  penControls.refreshPalette(settings.palette, paperTone(settings));
+  const inkColor = settings.color.toLowerCase();
+  const paletteColor = !settings.palette && ['#243746', '#242a35'].includes(inkColor) ? '#171717' : inkColor;
   document.querySelectorAll('[data-color]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.color === paletteColor)));
   document.querySelectorAll('[data-width]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.width) === settings.width)));
   $('#selection-hint').textContent = selection.size ? `${selection.size} stroke${selection.size === 1 ? '' : 's'} · drag to move` : '';
-  $('#paper-tone').value = settings.paperTone; $('#paper-pattern').value = settings.paper;
+  $('#paper-tone').value = paperTone(settings); $('#paper-pattern').value = settings.paper;
   $('#pen-type').value = settings.penType || 'pen';
   $('#shape-select').value = tool === 'shape' ? shapeKind : '';
   $('#shape-select').dataset.active = String(tool === 'shape');
+  $('#shape-select').hidden = gridMode();
+  $('#grid-shapes').hidden = !gridMode();
+  $('#diagram-shape').textContent = DIAGRAM_SHAPES[diagramShape()];
+  $('#diagram-shape').setAttribute('aria-pressed', String(tool === 'diagram'));
+  $('#scroll-mode').setAttribute('aria-pressed', String(!gridMode()));
+  $('#grid-mode').setAttribute('aria-pressed', String(gridMode()));
+  const title = documentTitle();
+  $('#sidebar-heading').textContent = title + 's';
+  $('#open-documents-title').textContent = 'Open ' + title.toLowerCase() + 's';
+  $('#closed-scrolls summary').textContent = 'Other ' + title.toLowerCase() + 's';
+  $('#file-title').textContent = title + ' file';
+  $('#open-sm').textContent = 'Open…';
+  $('#export-label').textContent = 'Export ' + title;
+  $('#export-sm').textContent = gridMode() ? 'ScrollMind Grid (.smg)' : 'ScrollMind (.sm)';
+  $('#clear-scroll').textContent = 'Clear current ' + title.toLowerCase();
+  $('#data-folder').textContent = 'Open writing folder ↗';
+  $('#new-scroll').title = 'New ' + title;
+  $('#scroll-navigation').hidden = gridMode();
+  $('#grid-settings').hidden = !gridMode();
+  $('#paper-ruling').hidden = gridMode();
+  $('#zoom-reset').textContent = Math.round(zoomLevel() * 100) + '%';
+  $('#zoom-in').disabled = zoomLevel() >= MAX_ZOOM;
+  $('#zoom-out').disabled = zoomLevel() <= MIN_ZOOM;
+  for (const input of gridInputs) if (input !== document.activeElement) input.value = gridSettings()[input.dataset.gridSize];
   penControls.refreshColor(settings.color);
-  document.body.classList.toggle('night', settings.paperTone === 'night'); updateCursor();
+  document.body.classList.toggle('night', paperTone(settings) === 'night'); updateCursor();
 }
-function setTool(value) { finishGesture(); tool = value; if (tool !== 'select') selection.clear(); updateControls(); requestRender(); }
-function updateCursor() { overlay.style.cursor = spaceDown || tool === 'hand' ? (active ? 'grabbing' : 'grab') : tool === 'select' ? 'default' : 'crosshair'; }
-function setOffset(value, persist = true) {
-  if (!Number.isFinite(value)) return;
-  offsetY = Math.max(-10_000_000, Math.min(10_000_000, value));
+function setTool(value, explicit = true) {
+  finishGesture(); dragNextTip = false; tool = value; mousePen = value === 'pen' && explicit;
+  if (tool !== 'select') selection.clear();
+  if (tool !== 'select') diagramSelection = null;
+  updateControls(); requestRender();
+}
+function updateCursor() {
+  const pen = lastPointerType === 'pen';
+  overlay.style.cursor = ['pan', 'move', 'move-node'].includes(active?.kind) ? 'grabbing'
+    : spaceDown || tool === 'hand' || (pen && dragNextTip) ? 'grab'
+    : tool === 'select' || (tool === 'pen' && !mousePen && !pen) ? 'default' : 'crosshair';
+}
+function setOffset(value, persist = true, x = viewX()) {
+  if (!Number.isFinite(value) || !Number.isFinite(x)) return;
+  const limit = coordinate => Math.max(-10_000_000, Math.min(10_000_000, coordinate));
+  if (gridMode()) { gridX = limit(x); gridY = limit(value); }
+  else { scrollX = limit(x); offsetY = limit(value); }
   if (persist) changed(); else requestRender();
+}
+function zoomAt(value, x = width / 2, y = height / 2) {
+  const previous = zoomLevel(), next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
+  if (previous === next) return;
+  if (gridMode()) gridZoom = next; else scrollZoom = next;
+  const delta = 1 / previous - 1 / next;
+  setOffset(viewY() + y * delta, true, viewX() + x * delta);
 }
 function resize() {
   width = innerWidth; height = innerHeight; ratio = devicePixelRatio || 1;
@@ -114,53 +193,55 @@ function resize() {
   requestRender();
 }
 function requestRender(redrawBase = true) { baseDirty ||= redrawBase; if (!frame) frame = requestAnimationFrame(render); }
-let parchmentTexture;
-function paperTexture() {
-  if (parchmentTexture) return parchmentTexture;
-  const tile = document.createElement('canvas'); tile.width = tile.height = 128;
-  const paint = tile.getContext('2d'); let seed = 73;
-  for (let index = 0; index < 1800; index++) {
-    seed = (seed * 1664525 + 1013904223) >>> 0; const x = seed % 128;
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    paint.fillStyle = index % 2 ? '#82735b09' : '#fffdf527'; paint.fillRect(x, seed % 128, 1, 1);
-  }
-  parchmentTexture = ctx.createPattern(tile, 'repeat'); return parchmentTexture;
-}
-function drawPaper() {
-  const tone = tones[settings.paperTone] || tones.ivory;
+function drawPaper(pages) {
+  const name = paperTone(settings), tone = tones[name];
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.fillStyle = tone.background; ctx.fillRect(0, 0, width, height);
-  if (settings.paperTone === 'parchment' && settings.paper !== 'dots') { ctx.save(); ctx.translate(0, -offsetY % 128); ctx.fillStyle = paperTexture(); ctx.fillRect(0, -128, width, height + 256); ctx.restore(); }
+  const x = viewX(), y = viewY(), visibleWidth = viewWidth(), visibleHeight = viewHeight();
+  const right = x + visibleWidth, bottom = y + visibleHeight;
+  if (pages) {
+    if (name !== 'night') { ctx.fillStyle = '#e8e7e1'; ctx.fillRect(0, 0, width, height); }
+    setWorldTransform(ctx);
+    paintGrid(ctx, pages, gridSettings(), { x, y, width: visibleWidth, height: visibleHeight }, name);
+    return;
+  }
+  setWorldTransform(ctx);
   ctx.strokeStyle = tone.line; ctx.fillStyle = tone.line; ctx.lineWidth = .65; ctx.globalAlpha = .5;
-  const gap = settings.paper === 'ruled' ? 32 : 24, first = Math.floor(offsetY / gap) * gap - offsetY;
+  const gap = settings.paper === 'ruled' ? 32 : 24;
+  const startX = 16 + Math.ceil((x - 16) / gap) * gap, startY = Math.ceil(y / gap) * gap;
   if (settings.paper === 'dots') {
     ctx.fillStyle = tone.dot; ctx.globalAlpha = .9; ctx.beginPath();
-    for (let y = first; y < height; y += gap) for (let x = 16; x < width; x += gap) { ctx.moveTo(x + 1, y); ctx.arc(x, y, 1, 0, Math.PI * 2); }
+    for (let row = startY; row < bottom; row += gap) for (let col = startX; col < right; col += gap) {
+      ctx.moveTo(col + 1, row); ctx.arc(col, row, 1, 0, Math.PI * 2);
+    }
     ctx.fill();
   } else if (settings.paper === 'ruled' || settings.paper === 'grid') {
-    ctx.beginPath(); for (let y = first; y < height; y += gap) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
-    if (settings.paper === 'grid') for (let x = 16; x < width; x += gap) { ctx.moveTo(x, 0); ctx.lineTo(x, height); }
+    ctx.beginPath(); for (let row = startY; row < bottom; row += gap) { ctx.moveTo(x, row); ctx.lineTo(right, row); }
+    if (settings.paper === 'grid') for (let col = startX; col < right; col += gap) { ctx.moveTo(col, y); ctx.lineTo(col, bottom); }
     ctx.stroke();
   }
-  ctx.globalAlpha = 1; ctx.setTransform(ratio, 0, 0, ratio, 0, -offsetY * ratio);
+  ctx.globalAlpha = 1;
   for (const marker of scroll.markers) {
-    if (marker.y < offsetY - 30 || marker.y > offsetY + height + 30) continue;
+    if (marker.y < y - 30 || marker.y > bottom + 30) continue;
     ctx.save(); ctx.strokeStyle = tone.marker; ctx.fillStyle = tone.marker; ctx.lineWidth = 1;
     if (marker.kind === 'marker') {
-      ctx.globalAlpha = .65; ctx.beginPath(); ctx.moveTo(width - 18, marker.y - 9); ctx.lineTo(width - 8, marker.y - 9); ctx.lineTo(width - 8, marker.y + 8); ctx.lineTo(width - 13, marker.y + 3); ctx.lineTo(width - 18, marker.y + 8); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = .65; ctx.beginPath(); ctx.moveTo(right - 18, marker.y - 9); ctx.lineTo(right - 8, marker.y - 9); ctx.lineTo(right - 8, marker.y + 8); ctx.lineTo(right - 13, marker.y + 3); ctx.lineTo(right - 18, marker.y + 8); ctx.closePath(); ctx.fill();
     } else {
       ctx.globalAlpha = .48; if (marker.kind === 'page-break') ctx.setLineDash([5, 7]);
-      ctx.beginPath(); ctx.moveTo(30, marker.y); ctx.lineTo(width - 30, marker.y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(x + 30, marker.y); ctx.lineTo(right - 30, marker.y); ctx.stroke(); ctx.setLineDash([]);
       ctx.font = marker.kind === 'section' ? '500 13px -apple-system, sans-serif' : '10px -apple-system, sans-serif';
       const textWidth = ctx.measureText(marker.label).width;
-      ctx.globalAlpha = 1; ctx.fillStyle = tone.background; ctx.fillRect(44, marker.y - 10, textWidth + 18, 20);
-      ctx.fillStyle = tone.marker; ctx.fillText(marker.label, 53, marker.y + 4);
+      ctx.globalAlpha = 1; ctx.fillStyle = tone.background; ctx.fillRect(x + 44, marker.y - 10, textWidth + 18, 20);
+      ctx.fillStyle = tone.marker; ctx.fillText(marker.label, x + 53, marker.y + 4);
     }
     ctx.restore();
   }
 }
+function setWorldTransform(paint) {
+  const scale = ratio * zoomLevel();
+  paint.setTransform(scale, 0, 0, scale, -viewX() * scale, -viewY() * scale);
+}
 function displayColor(color) {
-  if (settings.paperTone !== 'night') return color;
-  return ({ '#243746': '#e5eaf1', '#242a35': '#e5eaf1', '#215b9c': '#7db3ee', '#b94d49': '#ed9690', '#397762': '#8bc7a9' })[color] || color;
+  return inkOnPaper(color, paperTone(settings));
 }
 function transformStroke(stroke, t) {
   return { ...stroke, width: Math.max(.01, Math.min(1000, stroke.width * Math.sqrt(Math.abs(t.scaleX * t.scaleY)))), points: stroke.points.map(point => ({ ...point, x: t.originX + (point.x - t.originX) * t.scaleX + t.dx, y: t.originY + (point.y - t.originY) * t.scaleY + t.dy })) };
@@ -197,93 +278,148 @@ function render() {
   frame = null;
   const transform = dragTransform();
   const preview = transform ? selectedStrokes().map(stroke => transformStroke(stroke, transform)) : null;
+  const { nodes, connections } = scroll.diagram;
+  const draft = active?.kind === 'draw-node' ? active.box : null;
+  const moved = ['move-node', 'resize-node'].includes(active?.kind) ? active.box : null;
+  const shownNodes = moved ? nodes.map(node => node.id === moved.id ? moved : node) : nodes;
+  const routes = moved ? diagramRoutes({ nodes: shownNodes, connections }) : liveRoutes();
+  const tone = paperTone(settings);
+  let connector;
+  if (active?.kind === 'connect') {
+    const { anchor, point } = shapePorts(active.node)[active.port];
+    connector = active.target ? routeConnection(active.node, active.target, nodes, active.port)
+      : [anchor, point, { x: active.current.x, y: point.y }, active.current];
+  }
   if (baseDirty) {
-    baseDirty = false; drawPaper();
-    for (const stroke of scroll.query({ x: -100, y: offsetY - 100, width: width + 200, height: height + 200 })) if (!(transform && selection.has(stroke.id))) drawStroke(ctx, stroke);
+    const pages = gridMode() ? gridBounds(gridSettings(), inkBounds(), diagramBounds(shownNodes, routes), draft,
+      active?.kind === 'ink' ? active.bounds : null, preview ? boundsOf(preview) : null) : null;
+    baseDirty = false; drawPaper(pages);
+    paintDiagram(ctx, shownNodes, routes, tone, gridMode() ? diagramSelection : null);
+    for (const stroke of scroll.query({ x: viewX() - 100, y: viewY() - 100, width: viewWidth() + 200, height: viewHeight() + 200 })) if (!(transform && selection.has(stroke.id))) drawStroke(ctx, stroke);
     if (preview) for (const stroke of preview) drawStroke(ctx, stroke);
   }
-  ink.setTransform(1, 0, 0, 1, 0, 0); ink.clearRect(0, 0, overlay.width, overlay.height); ink.setTransform(ratio, 0, 0, ratio, 0, -offsetY * ratio);
+  ink.setTransform(1, 0, 0, 1, 0, 0); ink.clearRect(0, 0, overlay.width, overlay.height);
+  setWorldTransform(ink);
   if (active?.kind === 'ink') drawStroke(ink, { points: active.points, color: active.color, width: active.width, penType: active.penType });
   if (active?.kind === 'shape') for (const stroke of active.preview) drawStroke(ink, stroke);
+  if (draft || connector) paintDiagram(ink, draft ? [draft] : [], [], tone, null, connector);
+  const selectedNode = gridMode() && shownNodes.find(node => node.id === diagramSelection);
+  if (selectedNode) paintShapeHandles(ink, selectedNode, tone);
   if (active?.kind === 'marquee') {
     const rect = rectangle(active.start, active.current); ink.fillStyle = '#427cba12'; ink.strokeStyle = '#4e83b5'; ink.lineWidth = 1; ink.setLineDash([5, 4]);
     ink.fillRect(rect.x, rect.y, rect.width, rect.height); ink.strokeRect(rect.x, rect.y, rect.width, rect.height); ink.setLineDash([]);
-  } else if (selection.size && tool === 'select') {
+  } else if (selection.size) {
     const bounds = boundsOf(preview || selectedStrokes());
     if (bounds) {
       const box = bounds, pad = 7;
-      ink.strokeStyle = settings.paperTone === 'night' ? '#8ebce7' : '#4e83b5'; ink.lineWidth = 1; ink.setLineDash([5, 4]);
-      ink.strokeRect(box.x - pad, box.y - pad, box.width + pad * 2, box.height + pad * 2); ink.setLineDash([]); ink.fillStyle = tones[settings.paperTone].background;
+      ink.strokeStyle = tone === 'night' ? '#8ebce7' : '#4e83b5'; ink.lineWidth = 1; ink.setLineDash([5, 4]);
+      ink.strokeRect(box.x - pad, box.y - pad, box.width + pad * 2, box.height + pad * 2); ink.setLineDash([]); ink.fillStyle = tones[tone].background;
       for (const point of corners(box, pad)) { ink.beginPath(); ink.arc(point.x, point.y, 4, 0, Math.PI * 2); ink.fill(); ink.stroke(); }
     }
   }
 }
-function world(event) { return { x: event.clientX, y: event.clientY + offsetY }; }
+function world(event) { return { x: event.clientX / zoomLevel() + viewX(), y: event.clientY / zoomLevel() + viewY() }; }
 function rectangle(a, b) { return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) }; }
 function corners(box, pad = 0) { return [{ x: box.x - pad, y: box.y - pad }, { x: box.x + box.width + pad, y: box.y - pad }, { x: box.x + box.width + pad, y: box.y + box.height + pad }, { x: box.x - pad, y: box.y + box.height + pad }]; }
 function inside(point, box, pad = 0) { return point.x >= box.x - pad && point.x <= box.x + box.width + pad && point.y >= box.y - pad && point.y <= box.y + box.height + pad; }
-function contact(event) { return event.pointerType !== 'pen' || event.pressure > 0; }
-function penInput(event) {
-  if (event.pointerType !== 'pen') return null;
-  const known = penButtons.has(event.pointerId);
-  const before = penButtons.get(event.pointerId) ?? { buttons: 0, contact: false };
-  const previous = before.buttons, wasContact = before.contact;
-  const buttons = event.buttons;
-  // Windows Ink reports barrel plus tip as button 2 with pressure; only a barrel pointerdown starts that contact.
-  const contactNow = windowsPen
-    ? Boolean(buttons & 1) || (Boolean(buttons & 2) && !(buttons & 32) && event.pressure > 0 && (event.type === 'pointerdown' ? event.button === 2 : wasContact))
-    : Boolean(buttons & 1);
-  penButtons.set(event.pointerId, { buttons, contact: contactNow });
-  if (windowsPen) return { tipDown: contactNow, tipStarted: contactNow && !wasContact && (known || event.type === 'pointerdown') };
-  return { tipDown: Boolean(buttons & 1), tipStarted: Boolean((buttons & 1) && !(previous & 1) && (known || event.type === 'pointerdown')) };
+function contact(event) {
+  return event.pointerType !== 'pen' || (event.tipDown ?? event.pressure > 0)
+    || Boolean((event.buttons & 32) && event.pressure > 0);
 }
 function barrelDelete(event) {
   return event.pointerType === 'pen' && Boolean(event.buttons & 2) && !(event.buttons & 32) && event.button !== 5;
 }
-function penInRange() { return windowsPen && performance.now() - penHoverAt < 500; }
-// A hovering Windows barrel click arrives as mouse input; returns true when it was handled as a pen-button click.
-function hoverMouseShortcut(event) {
-  const mapped = penButtonFromHoverMouse(event, penInRange());
-  if (!mapped) return false;
-  event.preventDefault();
-  if (loaded && !loadError && !fileOperation) penShortcut(mapped);
-  return true;
-}
 function penShortcut(event) {
-  const action = penShortcuts.update(event);
-  if (!action) return false;
-  finishGesture(); safely(action); return true;
+  const action = event.pointerType === 'pen' ? penShortcuts.update(event.type === 'pointerenter' ? { ...event, type: 'pointermove' } : event)
+    : event.pointerType === 'mouse' ? middleClicks.update({
+      type: event.type, pointerType: 'pen', pointerId: event.pointerId, buttons: event.buttons,
+      clientX: event.clientX, clientY: event.clientY,
+    }) : null;
+  if (!action || (event.pointerType === 'mouse' && action !== 'redo')) return false;
+  finishGesture();
+  if (action === 'drag-next') {
+    dragNextTip = true;
+    updateCursor();
+  } else safely(action);
+  return true;
 }
 function eventTool(event) {
   if (spaceDown || (event.buttons & 4)) return 'hand';
   if (event.pointerType === 'pen' && ((event.buttons & 34) || event.button === 5)) return 'eraser';
+  if (event.pointerType === 'pen' && dragNextTip) return 'select';
+  if (event.pointerType === 'mouse' && tool === 'pen' && !mousePen) return 'select';
   return tool;
 }
-function capture(event) { try { overlay.setPointerCapture(event.pointerId); } catch {} }
+function capture(pointerId) { try { overlay.setPointerCapture(pointerId); } catch {} }
 function pointOf(event) { return { ...world(event), p: event.pointerType === 'pen' ? Math.max(.01, Math.min(1, event.pressure)) : .5 }; }
 function appendPoint(event, pressure) {
   const point = pointOf(event), previous = active.points.at(-1);
   if (pressure !== undefined) point.p = pressure;
-  if (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) >= .35 || Math.abs(point.p - previous.p) >= .03) active.points.push(point);
+  if (!previous || Math.hypot(point.x - previous.x, point.y - previous.y) >= .35 || Math.abs(point.p - previous.p) >= .03) {
+    active.points.push(point);
+    const extent = active.extent ??= { left: point.x, top: point.y, right: point.x, bottom: point.y };
+    extent.left = Math.min(extent.left, point.x); extent.top = Math.min(extent.top, point.y);
+    extent.right = Math.max(extent.right, point.x); extent.bottom = Math.max(extent.bottom, point.y);
+    const radius = active.width / 2;
+    active.bounds = { x: extent.left - radius, y: extent.top - radius, width: extent.right - extent.left + radius * 2, height: extent.bottom - extent.top + radius * 2 };
+  }
 }
 function eraseAt(point) {
   const radius = 12;
   const hits = scroll.query({ x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2 }).filter(stroke => strokeHitsPoint(stroke, point, radius));
-  if (hits.length && scroll.remove(hits.map(stroke => stroke.id))) { active.changed = true; requestRender(); }
+  const diagram = !hits.length && gridMode() ? diagramHit(scroll.diagram.nodes, liveRoutes(), point) : null;
+  const removed = diagram ? scroll.removeDiagramItem(diagram.node?.id ?? diagram.route.id) : scroll.remove(hits.map(stroke => stroke.id));
+  if (removed) { active.changed = true; requestRender(); }
 }
-function pointerDown(event, pen = penInput(event)) {
-  if (event.pointerType === 'pen') lastPenAt = performance.now();
-  if (!loaded || loadError || fileOperation || event.pointerType === 'touch') return;
-  if (event.type === 'pointerdown' && penShortcut(event)) return;
+function startDiagramGesture(currentTool, event, point) {
+  const pointerId = event.pointerId;
+  if (currentTool === 'diagram') {
+    const box = { ...drawShapeBox(point, point, false), kind: diagramShape(), color: settings.color };
+    active = { kind: 'draw-node', pointerId, start: point, box };
+    diagramSelection = null;
+    return true;
+  }
+  if (currentTool !== 'select') return false;
+  const hit = diagramHit(scroll.diagram.nodes, liveRoutes(), point, diagramSelection);
+  diagramSelection = hit?.node?.id ?? hit?.route?.id ?? null;
+  if (!hit) return false;
+  selection.clear();
+  if (hit.port !== undefined) active = { kind: 'connect', pointerId, node: hit.node, port: hit.port, current: point };
+  else if (hit.corner !== undefined) active = { kind: 'resize-node', pointerId, ...hit, start: point, box: hit.node };
+  else if (hit.node) active = { kind: 'move-node', pointerId, node: hit.node, start: point, box: hit.node };
+  return true;
+}
+function updateDiagramGesture(event) {
+  const point = world(event);
+  if (active.kind === 'draw-node') Object.assign(active.box, drawShapeBox(active.start, point, event.shiftKey));
+  else if (active.kind === 'connect') {
+    active.current = point;
+    const target = diagramHit(scroll.diagram.nodes, [], point)?.node;
+    active.target = target?.id === active.node.id ? null : target;
+  } else {
+    const delta = { x: point.x - active.start.x, y: point.y - active.start.y };
+    active.box = active.kind === 'move-node'
+      ? { ...active.node, x: active.node.x + delta.x, y: active.node.y + delta.y }
+      : resizeShapeBox(active.node, active.corner, active.opposite, delta, event.shiftKey);
+  }
+}
+function pointerDown(event) {
   if (active) return;
   $('#context-menu').hidden = true;
   if (event.button === 2 && event.pointerType !== 'pen') return;
   const currentTool = eventTool(event);
   const barrelErase = currentTool === 'eraser' && barrelDelete(event);
-  if (barrelErase ? !pen.tipStarted : currentTool !== 'hand' && !contact(event)) return;
-  event.preventDefault(); overlay.focus({ preventScroll: true }); capture(event);
+  if (barrelErase ? !event.tipStarted : currentTool !== 'hand' && !contact(event)) return;
+  if (event.tipStarted) dragNextTip = false;
+  event.preventDefault(); overlay.focus({ preventScroll: true });
   const point = world(event);
-  if (currentTool === 'hand') active = { kind: 'pan', pointerId: event.pointerId, initialY: event.clientY, initialOffset: offsetY, temporary: tool !== 'hand' };
+  if (gridMode() && startDiagramGesture(currentTool, event, point)) {
+    captureGesture(event); updateControls(); requestRender(); return;
+  }
+  if (currentTool === 'hand') active = {
+    kind: 'pan', pointerId: event.pointerId, x: event.clientX, y: event.clientY, initialX: viewX(), initialY: viewY(),
+    temporary: tool !== 'hand', upper: Boolean(event.buttons & 4), moved: !(event.buttons & 4) || spaceDown,
+  };
   else if (currentTool === 'eraser') { scroll.beginGroup(); active = { kind: barrelErase ? 'barrel-erase' : 'erase', pointerId: event.pointerId, changed: false, previous: point }; eraseAt(point); }
   else if (currentTool === 'shape') active = { kind: 'shape', pointerId: event.pointerId, shape: shapeKind, start: point, current: point, color: settings.color, width: settings.width, penType: settings.penType || 'pen', constrain: event.shiftKey, preview: [] };
   else if (currentTool === 'select') {
@@ -292,25 +428,40 @@ function pointerDown(event, pen = penInput(event)) {
     if (corner >= 0 && box.width > 1 && box.height > 1) {
       const opposite = corners(box)[(corner + 2) % 4]; active = { kind: 'resize', pointerId: event.pointerId, box, opposite, start: point, transform: { scaleX: 1, scaleY: 1, originX: opposite.x, originY: opposite.y, dx: 0, dy: 0 } };
     } else if (box && inside(point, box, 7) && !event.shiftKey) active = { kind: 'move', pointerId: event.pointerId, start: point, dx: 0, dy: 0 };
-    else { active = { kind: 'marquee', pointerId: event.pointerId, start: point, current: point, previousSelection: event.shiftKey ? new Set(selection) : new Set() }; if (!event.shiftKey) selection.clear(); }
-  } else { selection.clear(); active = { kind: 'ink', pointerId: event.pointerId, points: [], color: settings.color, width: settings.width, penType: settings.penType || 'pen' }; appendPoint(event); }
-  updateCursor(); requestRender();
+    else {
+      const hit = !event.shiftKey
+        ? scroll.query({ x: point.x - 5, y: point.y - 5, width: 10, height: 10 }).findLast(stroke => strokeHitsPoint(stroke, point, 5))
+        : null;
+      if (hit) {
+        selection = new Set([hit.id]);
+        active = { kind: 'move', pointerId: event.pointerId, start: point, dx: 0, dy: 0 };
+      } else {
+        active = { kind: 'marquee', pointerId: event.pointerId, start: point, current: point, previousSelection: event.shiftKey ? new Set(selection) : new Set() };
+        if (!event.shiftKey) selection.clear();
+      }
+    }
+  } else { selection.clear(); diagramSelection = null; active = { kind: 'ink', pointerId: event.pointerId, points: [], color: settings.color, width: settings.width, penType: settings.penType || 'pen' }; appendPoint(event); }
+  captureGesture(event); updateCursor(); requestRender();
+}
+function captureGesture(event) {
+  if (!active) return;
+  active.nativePointerId = event.nativePointerId ?? event.pointerId;
+  capture(active.nativePointerId);
 }
 function pointerMove(event) {
-  const pen = penInput(event);
-  if (loaded && !loadError && !fileOperation && penShortcut(event)) return;
   if (!active) {
-    if (event.pointerType === 'pen' && event.buttons && (barrelDelete(event) ? pen.tipStarted : contact(event))) pointerDown(event, pen);
+    if (event.pointerType === 'pen' && ((event.buttons & 4) || event.tipStarted)) pointerDown(event);
     return;
   }
   if (event.pointerId !== active.pointerId) return;
   event.preventDefault(); const currentTool = eventTool(event);
-  if (active.kind === 'barrel-erase' && (!pen?.tipDown || !barrelDelete(event) || currentTool !== 'eraser')) { finishGesture(); return; }
-  if (active.kind === 'pan' && active.temporary && currentTool !== 'hand') { finishGesture(); if (contact(event) && event.buttons) pointerDown(event, pen); return; }
-  if (event.pointerType === 'pen' && ['ink', 'erase', 'shape'].includes(active.kind)) {
-    const expected = currentTool === 'eraser' ? barrelDelete(event) ? 'barrel-erase' : 'erase' : currentTool === 'hand' ? 'pan' : currentTool === 'shape' ? 'shape' : 'ink';
-    if (expected !== active.kind) { finishGesture(); if (contact(event) || expected === 'pan' || pen?.tipStarted) pointerDown(event, pen); return; }
-    if (!contact(event)) { finishGesture(); return; }
+  if (active.kind === 'barrel-erase' && (!event.tipDown || !barrelDelete(event) || currentTool !== 'eraser')) { finishGesture(); return; }
+  if (active.kind === 'pan' && active.temporary && currentTool !== 'hand') { finishGesture(); if (event.tipStarted) pointerDown(event); return; }
+  if (event.pointerType === 'pen' && active.kind !== 'pan' && !contact(event)) { pointerUp(event); return; }
+  if (event.pointerType === 'pen' && ['ink', 'erase', 'shape', 'draw-node'].includes(active.kind)) {
+    const expected = currentTool === 'eraser' ? barrelDelete(event) ? 'barrel-erase' : 'erase'
+      : currentTool === 'hand' ? 'pan' : currentTool === 'shape' ? 'shape' : currentTool === 'diagram' ? 'draw-node' : 'ink';
+    if (expected !== active.kind) { finishGesture(); if (expected === 'pan' || event.tipStarted || currentTool === 'eraser' && !barrelDelete(event)) pointerDown(event); return; }
   }
   if (active.kind === 'ink') { const samples = event.getCoalescedEvents?.() || []; for (const sample of samples.length ? samples : [event]) if (contact(sample)) appendPoint(sample); }
   else if (active.kind === 'erase' || active.kind === 'barrel-erase') {
@@ -321,7 +472,7 @@ function pointerMove(event) {
   } else if (active.kind === 'shape') {
     active.current = world(event); active.constrain = event.shiftKey;
     active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: active.constrain });
-  } else if (active.kind === 'pan') setOffset(active.initialOffset + active.initialY - event.clientY, false);
+  } else if (active.kind === 'pan') updatePan(event);
   else if (active.kind === 'move') { const point = world(event); active.dx = point.x - active.start.x; active.dy = point.y - active.start.y; }
   else if (active.kind === 'resize') {
     const point = world(event), opposite = active.opposite;
@@ -329,13 +480,26 @@ function pointerMove(event) {
     if (event.shiftKey) scaleX = scaleY = Math.max(scaleX, scaleY);
     active.transform = { scaleX, scaleY, originX: opposite.x, originY: opposite.y, dx: 0, dy: 0 };
   } else if (active.kind === 'marquee') active.current = world(event);
-  requestRender(!['ink', 'marquee', 'shape'].includes(active.kind));
+  else updateDiagramGesture(event);
+  requestRender(gridMode() || !['ink', 'marquee', 'shape'].includes(active.kind));
+}
+function updatePan(event) {
+  const dx = active.x - event.clientX, dy = active.y - event.clientY;
+  active.moved ||= Math.hypot(dx, dy) > PEN_CLICK_MOVEMENT;
+  if (active.moved) {
+    const sideways = gridMode() || zoomLevel() !== 1 || scrollX !== 0;
+    setOffset(active.initialY + dy / zoomLevel(), false, sideways ? active.initialX + dx / zoomLevel() : 0);
+  }
 }
 function finishGesture(cancel = false) {
   if (!active) return;
   const gesture = active; active = null; let modified = false;
   if (gesture.kind === 'ink' && gesture.points.length) modified = scroll.add([makeStroke(gesture.points, gesture.color, gesture.width, gesture.penType)]);
   else if (!cancel && gesture.kind === 'shape' && gesture.preview.length) modified = scroll.add(gesture.preview);
+  else if (!cancel && gesture.kind === 'draw-node') {
+    diagramSelection = scroll.addShape(gesture.box); tool = 'pen'; mousePen = false; modified = true;
+  } else if (!cancel && ['move-node', 'resize-node'].includes(gesture.kind)) modified = scroll.updateShape(gesture.node.id, gesture.box);
+  else if (!cancel && gesture.kind === 'connect' && gesture.target) modified = scroll.connectShapes(gesture.node.id, gesture.target.id, gesture.port);
   else if (gesture.kind === 'erase' || gesture.kind === 'barrel-erase') { scroll.endGroup(); modified = gesture.changed; }
   else if (!cancel && gesture.kind === 'move' && (Math.abs(gesture.dx) > .1 || Math.abs(gesture.dy) > .1)) modified = scroll.move([...selection], gesture.dx, gesture.dy);
   else if (!cancel && gesture.kind === 'resize') modified = scroll.transform([...selection], gesture.transform);
@@ -343,25 +507,50 @@ function finishGesture(cancel = false) {
     const box = rectangle(gesture.start, gesture.current); selection = gesture.previousSelection;
     const hits = box.width < 3 && box.height < 3 ? scroll.query({ x: box.x - 5, y: box.y - 5, width: 10, height: 10 }).filter(stroke => strokeHitsPoint(stroke, gesture.current, 5)).slice(-1) : scroll.query(box).filter(stroke => strokeIntersectsRect(stroke, box));
     for (const stroke of hits) selection.add(stroke.id);
-  } else if (gesture.kind === 'pan') modified = offsetY !== gesture.initialOffset;
-  try { if (overlay.hasPointerCapture(gesture.pointerId)) overlay.releasePointerCapture(gesture.pointerId); } catch {}
+  } else if (gesture.kind === 'pan') modified = viewY() !== gesture.initialY || viewX() !== gesture.initialX;
+  try { if (overlay.hasPointerCapture(gesture.nativePointerId)) overlay.releasePointerCapture(gesture.nativePointerId); } catch {}
   if (modified) changed(); updateControls(); requestRender();
 }
-overlay.addEventListener('pointerdown', event => { if (hoverMouseShortcut(event) && event.button === 2) return; if (windows && event.pointerType === 'pen') event.preventDefault(); pointerDown(event); });
-for (const type of ['pointerover', 'pointerenter', 'pointermove']) overlay.addEventListener(type, event => { if (windowsPen && event.pointerType === 'pen') { penHoverAt = performance.now(); if (type === 'pointermove' && !event.buttons) lastPenAt = penHoverAt; } });
-for (const type of ['pointerout', 'pointerleave']) overlay.addEventListener(type, event => { if (event.pointerType === 'pen') penHoverAt = -Infinity; });
-if (windows) overlay.addEventListener('pointermove', event => { if (event.pointerType === 'pen' && event.buttons) lastPenAt = performance.now(); });
-overlay.addEventListener('pointermove', pointerMove);
-if (windows) overlay.addEventListener('pointerup', event => { if (event.pointerType === 'pen') lastPenAt = performance.now(); });
-overlay.addEventListener('pointerup', event => { if (hoverMouseShortcut(event) && event.button === 2) return; penInput(event); if (loaded && !loadError && !fileOperation && penShortcut(event)) return; if (active?.pointerId === event.pointerId) { if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5); else if (active.kind === 'shape') { active.current = world(event); active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: event.shiftKey }); } finishGesture(); } });
-overlay.addEventListener('pointercancel', event => { penButtons.delete(event.pointerId); penShortcuts.reset(); finishGesture(true); });
-overlay.addEventListener('lostpointercapture', () => finishGesture(true));
-overlay.addEventListener('pointerleave', event => { if (!active && event.buttons === 0) penButtons.delete(event.pointerId); });
+function pointerUp(event) {
+  if (active?.pointerId !== event.pointerId) return;
+  if (active.kind === 'pan') {
+    if (active.upper && (event.buttons & 4)) return;
+    updatePan(event);
+  } else if (event.pointerType === 'pen' && contact(event) && (active.kind !== 'barrel-erase' || barrelDelete(event))) return;
+  else if (active.kind === 'ink') appendPoint(event, active.points.at(-1)?.p ?? .5);
+  else if (active.kind === 'shape') {
+    active.current = world(event); active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: event.shiftKey });
+  } else if (['draw-node', 'move-node', 'resize-node', 'connect'].includes(active.kind)) updateDiagramGesture(event);
+  finishGesture();
+}
+function handlePointer(rawEvent) {
+  if (!loaded || loadError || fileOperation || rawEvent.pointerType === 'touch') return;
+  const event = penInput.update(rawEvent);
+  if (lastPointerType !== event.pointerType) { lastPointerType = event.pointerType; updateCursor(); }
+  if (penShortcut(event)) { event.preventDefault(); return; }
+  if (event.pointerType === 'pen' && event.button === 2) event.preventDefault();
+  if (event.type === 'pointerdown') pointerDown(event);
+  else if (event.type === 'pointermove') pointerMove(event);
+  else if (event.type === 'pointerup') pointerUp(event);
+}
+for (const type of ['pointerenter', 'pointerdown', 'pointermove', 'pointerup']) overlay.addEventListener(type, handlePointer);
+function resetShortcuts() {
+  penInput.reset(); penShortcuts.reset(); middleClicks.reset(); dragNextTip = false; lastPointerType = null;
+}
+overlay.addEventListener('pointercancel', () => { resetShortcuts(); finishGesture(true); updateCursor(); });
+overlay.addEventListener('lostpointercapture', event => {
+  if (active?.nativePointerId === event.pointerId) finishGesture(true);
+});
 overlay.addEventListener('wheel', event => {
   event.preventDefault(); if (active || fileOperation || !loaded || loadError) return;
-  const multiplier = event.deltaMode === 1 ? 24 : event.deltaMode === 2 ? height : 1; setOffset(offsetY + event.deltaY * multiplier);
+  const multiplier = event.deltaMode === 1 ? 24 : event.deltaMode === 2 ? height : 1;
+  if (event.ctrlKey || event.metaKey) { zoomAt(zoomLevel() * Math.exp(-event.deltaY * multiplier * .003), event.clientX, event.clientY); return; }
+  const canPanX = gridMode() || zoomLevel() !== 1 || scrollX !== 0;
+  const sideways = canPanX && event.shiftKey && !event.deltaX;
+  const distance = multiplier / zoomLevel();
+  setOffset(viewY() + (sideways ? 0 : event.deltaY * distance), true, viewX() + (canPanX ? (sideways ? event.deltaY : event.deltaX) * distance : 0));
 }, { passive: false });
-window.addEventListener('blur', () => { finishGesture(); penButtons.clear(); penShortcuts.reset(); spaceDown = false; updateCursor(); }); window.addEventListener('resize', resize);
+window.addEventListener('blur', () => { finishGesture(); resetShortcuts(); spaceDown = false; updateCursor(); }); window.addEventListener('resize', resize);
 
 async function copySelection(cut = false) {
   finishGesture(); const strokes = selectedStrokes(); if (!strokes.length) return;
@@ -377,20 +566,34 @@ async function pasteSelection() {
   if (!data.strokes.length) return;
   if (clipboardSource !== text) { clipboardSource = text; pasteCount = 0; } pasteCount++;
   const bounds = boundsOf(data.strokes); let dx = pasteCount * 24, dy = pasteCount * 24;
-  if (bounds.y + dy + bounds.height < offsetY + 80 || bounds.y + dy > offsetY + height - 50) dy = offsetY + height / 2 - bounds.y - bounds.height / 2;
-  if (bounds.x + dx > width - 50 || bounds.x + dx + bounds.width < 0) dx = width / 2 - bounds.x - bounds.width / 2;
+  if (bounds.y + dy + bounds.height < viewY() + 80 || bounds.y + dy > viewY() + viewHeight() - 50) dy = viewY() + viewHeight() / 2 - bounds.y - bounds.height / 2;
+  if (bounds.x + dx > viewX() + viewWidth() - 50 || bounds.x + dx + bounds.width < viewX()) dx = viewX() + viewWidth() / 2 - bounds.x - bounds.width / 2;
   const strokes = data.strokes.map(stroke => ({ ...stroke, id: crypto.randomUUID(), points: stroke.points.map(point => ({ ...point, x: point.x + dx, y: point.y + dy })) }));
-  scroll.add(strokes); selection = new Set(strokes.map(stroke => stroke.id)); tool = 'select'; changed();
+  scroll.add(strokes); diagramSelection = null; selection = new Set(strokes.map(stroke => stroke.id)); tool = 'select'; changed();
 }
-function deleteSelection() { finishGesture(); if (scroll.remove([...selection])) { selection.clear(); changed(); } }
+function deleteSelection() {
+  finishGesture();
+  const removed = diagramSelection ? scroll.removeDiagramItem(diagramSelection) : scroll.remove([...selection]);
+  if (removed) { selection.clear(); diagramSelection = null; changed(); }
+}
 function duplicateSelection() {
   finishGesture(); const copies = selectedStrokes().map(stroke => ({ ...stroke, id: crypto.randomUUID(), points: stroke.points.map(point => ({ ...point, x: point.x + 24, y: point.y + 24 })) }));
   if (copies.length) { scroll.add(copies); selection = new Set(copies.map(stroke => stroke.id)); changed(); }
 }
 async function command(value, detail) {
   if (!loaded || loadError || fileOperation) return;
+  if (value === 'view-scroll' || value === 'view-grid') {
+    const kind = value.slice(5);
+    if (kind !== workspace.kind) return scrollFileCommand('switch-workspace', kind);
+    return;
+  }
   if (['open-sm', 'new-scroll', 'select-scroll', 'close-scroll', 'delete-scroll', 'rename-scroll', 'clear-scroll'].includes(value) || value.startsWith('export-')) return scrollFileCommand(value, detail);
   if (value.startsWith('tool-')) return setTool(value.slice(5));
+  if (['zoom-in', 'zoom-out', 'zoom-reset'].includes(value)) {
+    finishGesture();
+    zoomAt(value === 'zoom-reset' ? 1 : zoomLevel() * (value === 'zoom-in' ? 1.25 : .8));
+    return;
+  }
   if (value === 'undo' || value === 'redo') { finishGesture(); if (scroll[value]()) { changed(); renderMarkers(); } }
   else if (['copy', 'cut', 'paste'].includes(value)) {
     const task = clipboardQueue.then(() => value === 'paste' ? pasteSelection() : copySelection(value === 'cut'));
@@ -398,31 +601,43 @@ async function command(value, detail) {
     await task;
   }
   else if (value === 'duplicate') duplicateSelection(); else if (value === 'delete') deleteSelection();
-  else if (value === 'select-all') { finishGesture(); tool = 'select'; selection = new Set(scroll.strokes.map(stroke => stroke.id)); updateControls(); requestRender(); }
-  else if (value === 'home') { finishGesture(); setOffset(0); } else if (value === 'fullscreen') await bridge.toggleFullscreen();
+  else if (value === 'select-all') { finishGesture(); tool = 'select'; diagramSelection = null; selection = new Set(scroll.strokes.map(stroke => stroke.id)); updateControls(); requestRender(); }
+  else if (value === 'home') { finishGesture(); setOffset(0, true, 0); } else if (value === 'fullscreen') await bridge.toggleFullscreen();
   else if (value === 'help') { finishGesture(); $('#help').showModal(); }
   else if (value === 'toggle-toolbar') penControls.toggleVisibility();
   else if (value === 'toggle-sidebar') toggleSidebar(); else if (value.startsWith('add-')) addMarker(value.slice(4));
 }
 function cacheScrollSession() {
-  if (workspace.activeId) scrollSessions.set(workspace.activeId, { scroll, settings: { ...settings }, offsetY, tool, selection: new Set(selection), brushStyles: structuredClone(brushStyles) });
+  if (workspace.activeId) scrollSessions.set(sessionKey(), {
+    scroll, settings: { ...settings }, view: savedView(), tool, mousePen, diagramSelection,
+    selection: new Set(selection), brushStyles: structuredClone(brushStyles),
+  });
+}
+function restoreView(view = {}) {
+  offsetY = view.offsetY ?? 0; scrollX = view.scrollX ?? 0; gridX = view.gridX ?? 0; gridY = view.gridY ?? 0;
+  scrollZoom = view.scrollZoom ?? 1; gridZoom = view.gridZoom ?? 1;
 }
 function activateScroll(result) {
-  const id = result.workspace.activeId;
-  const cached = scrollSessions.get(id);
+  const cached = scrollSessions.get(sessionKey(result.workspace));
   workspace = result.workspace;
   if (cached) {
-    scroll = cached.scroll; settings = { ...cached.settings }; offsetY = cached.offsetY; tool = cached.tool; selection = new Set(cached.selection); brushStyles = structuredClone(cached.brushStyles || { ink: null, highlighter: null });
+    scroll = cached.scroll; settings = { ...cached.settings }; restoreView(cached.view);
+    tool = cached.tool; mousePen = cached.mousePen; diagramSelection = cached.diagramSelection;
+    selection = new Set(cached.selection); brushStyles = structuredClone(cached.brushStyles || { ink: null, highlighter: null });
   } else {
     const document = result.document;
     brushStyles = { ink: null, highlighter: null };
     scroll = new Scroll(document || {});
     const defaults = scroll.snapshot().settings;
     settings = { ...defaults, ...document?.settings };
-    offsetY = document?.view.offsetY ?? 0;
-    selection.clear();
+    if (gridMode()) {
+      settings.mode = 'grid';
+      settings.grid ??= { ...DEFAULT_GRID };
+    }
+    restoreView(document?.view);
+    selection.clear(); diagramSelection = null; tool = 'pen'; mousePen = false;
   }
-  active = null; spaceDown = false; penButtons.clear(); penShortcuts.reset();
+  active = null; spaceDown = false; resetShortcuts();
   revision = savedRevision = 0;
   pasteCount = 0;
   updateControls(); renderScrolls(); renderMarkers(); requestRender();
@@ -431,45 +646,48 @@ async function scrollFileCommand(value, detail) {
   if (fileOperation) return fileOperation;
   if (value === 'select-scroll' && detail === workspace.activeId) return;
   finishGesture();
-  penButtons.clear(); penShortcuts.reset();
+  resetShortcuts();
   document.body.inert = true;
   fileOperation = (async () => {
     await clipboardQueue;
     await flushSave();
     cacheScrollSession();
-    if (value === 'open-sm') {
+    if (value === 'switch-workspace') {
+      activateScroll(await bridge.switchWorkspace(detail));
+      message('Saved');
+    } else if (value === 'open-sm') {
       const result = await bridge.openDocument();
       if (result.canceled) return;
       activateScroll(result);
-      message('Scroll opened · saved locally');
+      message(documentTitle() + ' opened · saved locally');
     } else if (value === 'clear-scroll') {
       if (scroll.clear()) {
-        selection.clear(); changed(); renderMarkers();
+        selection.clear(); diagramSelection = null; changed(); renderMarkers();
         await flushSave();
-        message('Scroll cleared · Undo restores it');
+        message(documentTitle() + ' cleared · Undo restores it');
       }
     } else if (value === 'new-scroll') {
       activateScroll(await bridge.newScroll({ settings }));
-      message('New scroll · saved locally');
+      message('New ' + documentTitle().toLowerCase() + ' · saved locally');
     } else if (value === 'select-scroll') {
       activateScroll(await bridge.selectScroll(detail));
       message('Saved');
     } else if (value === 'close-scroll') {
       activateScroll(await bridge.closeScroll(detail || workspace.activeId));
-      message('Scroll closed · saved locally');
+      message(documentTitle() + ' closed · saved locally');
     } else if (value === 'delete-scroll') {
       const id = detail || workspace.activeId;
       const result = await bridge.deleteScroll(id);
-      scrollSessions.delete(id);
+      scrollSessions.delete(sessionKey(workspace, id));
       activateScroll(result);
-      message('Scroll deleted · copy kept in Deleted Scrolls');
+      message(documentTitle() + ' deleted · recoverable copy saved');
     } else if (value === 'rename-scroll') {
       const result = await bridge.renameScroll(detail.id, detail.name);
       workspace = result.workspace; renderScrolls();
     } else {
-      const format = value.slice(7);
+      const format = value === 'export-sm' && gridMode() ? 'smg' : value.slice(7);
       const result = await bridge.exportDocument(format, { width, height });
-      if (!result.canceled) message(`${format === 'sm' ? 'ScrollMind' : format.toUpperCase()} export saved`);
+      if (!result.canceled) message(`${format === 'sm' || format === 'smg' ? documentTitle() : format.toUpperCase()} export saved`);
     }
   })();
   try { return await fileOperation; }
@@ -477,9 +695,13 @@ async function scrollFileCommand(value, detail) {
 }
 function safely(value, detail) { Promise.resolve(command(value, detail)).catch(error => message(error.message, true)); }
 document.querySelectorAll('[data-tool]').forEach(button => button.addEventListener('click', () => setTool(button.dataset.tool)));
-document.querySelectorAll('[data-color]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.color = button.dataset.color; if (tool !== 'shape') setTool('pen'); changed(); }));
+document.querySelectorAll('[data-color]').forEach(button => button.addEventListener('click', () => {
+  finishGesture(); settings.color = button.dataset.color;
+  if (!['shape', 'diagram'].includes(tool)) setTool('pen', mousePen);
+  changed();
+}));
 document.querySelectorAll('[data-width]').forEach(button => button.addEventListener('click', () => { finishGesture(); settings.width = Number(button.dataset.width); changed(); }));
-for (const name of ['undo', 'redo', 'home', 'fullscreen']) $(`#${name}`).addEventListener('click', () => safely(name));
+for (const name of ['undo', 'redo', 'home', 'fullscreen', 'zoom-in', 'zoom-out', 'zoom-reset']) $(`#${name}`).addEventListener('click', () => safely(name));
 for (const name of ['open-sm', 'new-scroll', 'clear-scroll', 'export-sm', 'export-svg', 'export-pdf']) $(`#${name}`).addEventListener('click', () => safely(name));
 $('#pen-type').addEventListener('change', event => {
   finishGesture();
@@ -488,15 +710,25 @@ $('#pen-type').addEventListener('change', event => {
     brushStyles[wasHighlighter ? 'highlighter' : 'ink'] = { color: settings.color, width: settings.width };
     Object.assign(settings, next === 'highlighter' ? brushStyles.highlighter || { color: '#e2b52b', width: 12 } : brushStyles.ink || { color: '#171717', width: 3 });
   }
-  settings.penType = next; if (tool !== 'shape') setTool('pen'); changed(); event.target.blur(); overlay.focus({ preventScroll: true });
+  settings.penType = next; if (!['shape', 'diagram'].includes(tool)) setTool('pen', mousePen); changed(); event.target.blur(); overlay.focus({ preventScroll: true });
 });
 $('#shape-select').addEventListener('change', event => { if (!event.target.value) return; shapeKind = event.target.value; setTool('shape'); event.target.blur(); overlay.focus({ preventScroll: true }); });
+$('#diagram-shape').addEventListener('click', () => { setTool('diagram'); overlay.focus({ preventScroll: true }); });
+$('#diagram-shape-select').addEventListener('change', event => {
+  const kind = event.target.value;
+  if (!Object.hasOwn(DIAGRAM_SHAPES, kind)) return;
+  settings.grid = { ...gridSettings(), shape: kind };
+  event.target.value = ''; setTool('diagram'); changed(); overlay.focus({ preventScroll: true });
+});
 $('#controls-link').addEventListener('click', () => safely('help')); $('#help-close').addEventListener('click', () => $('#help').close());
 $('#context-menu').addEventListener('click', event => { const button = event.target.closest('[data-command]'); if (button) { safely(button.dataset.command); $('#context-menu').hidden = true; } });
 overlay.addEventListener('contextmenu', event => {
-  event.preventDefault(); if (!loaded || event.pointerType === 'pen' || ((windows || windowsPen) && (penInRange() || performance.now() - lastPenAt < 1000))) return; finishGesture(); const menu = $('#context-menu'); menu.hidden = false;
+  event.preventDefault(); if (!loaded || event.pointerType === 'pen' || penInput.isNear(event)) return; finishGesture(); const menu = $('#context-menu'); menu.hidden = false;
   menu.style.left = `${Math.min(width - 206, event.clientX)}px`; menu.style.top = `${Math.min(height - 213, event.clientY)}px`;
-  for (const button of menu.querySelectorAll('button')) button.disabled = button.dataset.command !== 'paste' && selection.size === 0;
+  for (const button of menu.querySelectorAll('button')) {
+    const command = button.dataset.command;
+    button.disabled = command !== 'paste' && !(selection.size || command === 'delete' && diagramSelection);
+  }
 });
 document.addEventListener('pointerdown', event => { if (!event.target.closest('#context-menu')) $('#context-menu').hidden = true; });
 function isTextInput(target) { return target instanceof HTMLElement && Boolean(target.closest('input,textarea,select,[contenteditable=true]')); }
@@ -514,19 +746,28 @@ document.addEventListener('keydown', event => {
     else if (key === 'n') action = 'new-scroll';
     else if (key === 'p') action = 'export-pdf';
     else if (key === 's' && event.shiftKey) action = 'export-sm';
+    else if (key === '+' || key === '=') action = 'zoom-in';
+    else if (key === '-') action = 'zoom-out';
     else if (key === 's') { event.preventDefault(); flushSave().catch(() => {}); return; }
   } else {
     if (key === 'b') action = 'tool-pen'; else if (key === 'e') action = 'tool-eraser'; else if (key === 'v') action = 'tool-select'; else if (key === 'h') action = 'tool-hand';
     else if (key === 'delete' || key === 'backspace') action = 'delete'; else if (key === 'tab') action = 'toggle-toolbar'; else if (key === '?' || key === 'f1') action = 'help'; else if (key === 'f11') action = 'fullscreen'; else if (key === 'home') action = 'home';
     else if (key === ' ') { event.preventDefault(); if (!event.repeat) { finishGesture(); spaceDown = true; updateCursor(); } return; }
     else if (key === 'escape') {
-      event.preventDefault(); if (active) finishGesture(true); else if (!$('#context-menu').hidden) $('#context-menu').hidden = true;
-      else if (selection.size) { selection.clear(); updateControls(); requestRender(); } else if (!$('#sidebar').hidden) toggleSidebar(false); else bridge.leaveFullscreen(); return;
+      event.preventDefault(); if (active) finishGesture(true); else if (dragNextTip) { dragNextTip = false; updateCursor(); } else if (!$('#context-menu').hidden) $('#context-menu').hidden = true;
+      else if (selection.size || diagramSelection) { selection.clear(); diagramSelection = null; updateControls(); requestRender(); } else if (!$('#sidebar').hidden) toggleSidebar(false); else bridge.leaveFullscreen(); return;
     } else if (key.startsWith('arrow')) {
       event.preventDefault(); finishGesture(); const amount = event.shiftKey ? 10 : 1;
-      if (selection.size) { const dx = key === 'arrowleft' ? -amount : key === 'arrowright' ? amount : 0, dy = key === 'arrowup' ? -amount : key === 'arrowdown' ? amount : 0; if (scroll.move([...selection], dx, dy)) changed(); }
-      else if (key === 'arrowup' || key === 'arrowdown') setOffset(offsetY + (key === 'arrowup' ? -1 : 1) * (event.shiftKey ? height * .8 : 48)); return;
-    } else if (key === 'pagedown' || key === 'pageup') { event.preventDefault(); finishGesture(); setOffset(offsetY + (key === 'pageup' ? -1 : 1) * height * .8); return; }
+      const dx = key === 'arrowleft' ? -1 : key === 'arrowright' ? 1 : 0, dy = key === 'arrowup' ? -1 : key === 'arrowdown' ? 1 : 0;
+      const node = scroll.diagram.nodes.find(node => node.id === diagramSelection);
+      if (node) { if (scroll.updateShape(node.id, { ...node, x: node.x + dx * amount, y: node.y + dy * amount })) changed(); }
+      else if (selection.size) { if (scroll.move([...selection], dx * amount, dy * amount)) changed(); }
+      else if (dy || (gridMode() || scrollZoom !== 1 || scrollX) && dx) {
+        setOffset(viewY() + dy * (event.shiftKey ? viewHeight() * .8 : 48 / zoomLevel()), true,
+          viewX() + dx * (event.shiftKey ? viewWidth() * .8 : 48 / zoomLevel()));
+      }
+      return;
+    } else if (key === 'pagedown' || key === 'pageup') { event.preventDefault(); finishGesture(); setOffset(viewY() + (key === 'pageup' ? -1 : 1) * viewHeight() * .8); return; }
   }
   if (action) { event.preventDefault(); safely(action); }
 });
@@ -535,11 +776,21 @@ function toggleSidebar(show = $('#sidebar').hidden) {
   finishGesture(); $('#sidebar').hidden = !show; $('#sidebar-toggle').setAttribute('aria-expanded', String(show)); $('#sidebar-toggle').setAttribute('aria-label', show ? 'Close sidebar' : 'Open sidebar');
   document.body.classList.toggle('sidebar-open', show); if (!show) overlay.focus({ preventScroll: true });
 }
-$('#sidebar-toggle').addEventListener('click', () => toggleSidebar()); $('#sidebar-close').addEventListener('click', () => toggleSidebar(false)); $('#start-link').addEventListener('click', () => setOffset(0));
+$('#sidebar-toggle').addEventListener('click', () => toggleSidebar()); $('#sidebar-close').addEventListener('click', () => toggleSidebar(false)); $('#start-link').addEventListener('click', () => safely('home'));
+for (const kind of ['scroll', 'grid']) $('#' + kind + '-mode').addEventListener('click', () => safely('view-' + kind));
+for (const input of gridInputs) input.addEventListener('change', () => {
+  const value = input.valueAsNumber;
+  if (!Number.isInteger(value) || value < 1 || value > GRID_LIMIT) {
+    input.value = gridSettings()[input.dataset.gridSize];
+    return;
+  }
+  settings.grid = { ...gridSettings(), [input.dataset.gridSize]: value };
+  changed();
+});
 function markerLabel(kind) { return kind === 'section' ? 'Section' : kind === 'page-break' ? 'Page break' : 'Marker'; }
 function addMarker(kind) {
-  if (!loaded || loadError || fileOperation || !['section', 'marker', 'page-break'].includes(kind)) return; finishGesture(); const count = scroll.markers.filter(marker => marker.kind === kind).length + 1;
-  scroll.addMarker({ id: crypto.randomUUID(), kind, y: offsetY + height / 2, label: `${markerLabel(kind)} ${count}` }); changed(); renderMarkers();
+  if (!loaded || loadError || fileOperation || gridMode() || !['section', 'marker', 'page-break'].includes(kind)) return; finishGesture(); const count = scroll.markers.filter(marker => marker.kind === kind).length + 1;
+  scroll.addMarker({ id: crypto.randomUUID(), kind, y: offsetY + viewHeight() / 2, label: `${markerLabel(kind)} ${count}` }); changed(); renderMarkers();
 }
 for (const kind of ['section', 'marker', 'page-break']) $(`#add-${kind}`).addEventListener('click', () => addMarker(kind));
 function renderMarkers() {
@@ -548,7 +799,7 @@ function renderMarkers() {
   for (const marker of markers) {
     const row = document.createElement('div'); row.className = 'marker-row'; row.dataset.kind = marker.kind;
     const go = document.createElement('button'); go.className = 'marker-go'; go.textContent = marker.kind === 'section' ? '§' : marker.kind === 'page-break' ? '↵' : '◇'; go.title = `Go to ${marker.label}`; go.setAttribute('aria-label', `Go to ${marker.label}`);
-    go.addEventListener('click', () => { finishGesture(); setOffset(marker.y - 130); });
+    go.addEventListener('click', () => { finishGesture(); setOffset(marker.y - 130 / zoomLevel()); });
     const label = document.createElement('input'); label.value = marker.label; label.maxLength = 200; label.setAttribute('aria-label', `${markerLabel(marker.kind)} name`);
     label.addEventListener('change', () => { const value = label.value.trim() || markerLabel(marker.kind); label.value = value; if (scroll.updateMarker(marker.id, { label: value })) { changed(); renderMarkers(); } });
     label.addEventListener('keydown', event => { if (event.key === 'Enter') { label.blur(); overlay.focus(); } });
@@ -568,7 +819,7 @@ function renderScrolls() {
     const go = document.createElement('button'); go.className = 'scroll-go'; go.textContent = item.name; go.title = `Switch to ${item.name}`;
     if (item.id === workspace.activeId) go.setAttribute('aria-current', 'page');
     go.addEventListener('click', () => safely('select-scroll', item.id));
-    const name = document.createElement('input'); name.className = 'scroll-name'; name.hidden = true; name.value = item.name; name.maxLength = 80; name.setAttribute('aria-label', 'Scroll name');
+    const name = document.createElement('input'); name.className = 'scroll-name'; name.hidden = true; name.value = item.name; name.maxLength = 80; name.setAttribute('aria-label', documentTitle() + ' name');
     const rename = document.createElement('button'); rename.className = 'scroll-rename'; rename.textContent = '✎'; rename.title = `Rename ${item.name}`; rename.setAttribute('aria-label', `Rename ${item.name}`);
     const editName = () => { name.hidden = false; go.hidden = true; name.focus(); name.select(); };
     rename.addEventListener('click', editName); go.addEventListener('dblclick', editName);
@@ -584,7 +835,13 @@ function renderScrolls() {
   }
   $('#closed-scrolls').hidden = !closedList.childElementCount;
 }
-$('#paper-tone').addEventListener('change', event => { finishGesture(); settings.paperTone = event.target.value; changed(); }); $('#paper-pattern').addEventListener('change', event => { finishGesture(); settings.paper = event.target.value; changed(); });
+$('#paper-tone').addEventListener('change', event => {
+  finishGesture();
+  if (gridMode()) settings.grid = { ...gridSettings(), paperTone: event.target.value };
+  else settings.paperTone = event.target.value;
+  changed();
+});
+$('#paper-pattern').addEventListener('change', event => { finishGesture(); settings.paper = event.target.value; changed(); });
 $('#display-select').addEventListener('change', async event => { try { finishGesture(); await bridge.moveToDisplay(event.target.value); } catch (error) { message(error.message, true); } });
 $('#data-folder').addEventListener('click', () => bridge.openDataFolder().catch(error => message(error.message, true)));
 status.addEventListener('click', () => { if (status.classList.contains('error')) bridge.openDataFolder(); });
@@ -600,13 +857,12 @@ async function initialize() {
   try {
     const [result, info, displays] = await Promise.all([bridge.load(), bridge.getAppInfo(), bridge.getDisplays()]);
     if (result.error && !result.document) throw new Error(result.error);
-    if (result.document) { scroll = new Scroll(result.document); settings = { ...settings, ...result.document.settings }; offsetY = result.document.view.offsetY; }
-    workspace = result.workspace;
+    activateScroll(result);
     $('#version').textContent = `ScrollMind ${info.version}`;
     for (const display of displays) { const option = document.createElement('option'); option.value = display.id; option.textContent = display.label; option.selected = display.selected; $('#display-select').append(option); }
     loaded = true;
     if (info.testMode) window.scrollmindDebug = Object.freeze({ getSnapshot: snapshot, getSelection: () => [...selection], getOffsetY: () => offsetY, setOffsetY: value => setOffset(value), getWorkspace: () => workspace });
     message(result.recovered ? 'Recovered from backup · saved locally' : 'Saved'); if (!result.document) changed(); updateControls(); renderScrolls(); renderMarkers(); resize();
-  } catch (error) { loadError = error.message; message('Couldn’t open scroll · click to open folder', true); console.error(error); }
+  } catch (error) { loadError = error.message; message('Couldn’t open the document · click to open folder', true); console.error(error); }
 }
 resize(); const initialization = initialize(); await initialization;

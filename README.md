@@ -1,6 +1,6 @@
 # ScrollMind
 
-Full-screen handwriting for Wacom pen displays, with an infinite vertical page. Write with a pressure-sensitive pen, then arrange your strokes with a mouse and keyboard. ScrollMind runs on macOS and Windows and saves your writing locally.
+Full-screen handwriting for Wacom pen displays, with an infinite vertical scroll and an expanding grid. Write with a pressure-sensitive pen, then arrange your work with a mouse and keyboard. ScrollMind runs on macOS and Windows and saves your writing locally.
 
 ## Download and install
 
@@ -12,7 +12,7 @@ The app is Developer ID signed and **not notarized**. If macOS blocks the first 
 
 ### Windows
 
-The Windows version requires **Windows 10 or later (x64)**. Run **ScrollMind-Setup-<version>.exe**, the Windows installer published with a release or built locally with `npm run build:win`. It installs for the current user and needs no administrator rights. Opening an .sm file in Explorer opens it in ScrollMind.
+The Windows version requires **Windows 10 or later (x64)**. Run **ScrollMind-Setup-<version>.exe**, the Windows installer published with a release or built locally with `npm run build:win`. It installs for the current user and needs no administrator rights. Open .sm and .smg files in Explorer with ScrollMind.
 
 The installer is **unsigned**. If SmartScreen blocks it, choose **More info**, then **Run anyway**.
 
@@ -21,9 +21,9 @@ The installer is **unsigned**. If SmartScreen blocks it, choose **More info**, t
 - **Ink:** Pen, Pencil, Fountain, Marker, and Highlighter; four widths from Fine to Broad; eight color swatches and a color wheel with brightness and hex controls.
 - **Selection:** rectangular selection, moving, resizing, copy, cut, paste, duplicate, and undo/redo.
 - **Highlighting:** translucent strokes keep writing visible; separate passes build color.
-- **Shapes:** lines, arrows, rectangles, ellipses, and triangles, stored as editable strokes.
+- **Shapes:** in Scroll mode, draw basic shapes as editable strokes. In Grid mode, move and resize flowchart shapes and attach automatically routed arrows.
 - **Scrolls:** keep several open, switch between them, and organize each with sections, markers, and page breaks.
-- **Paper:** plain, dotted, ruled, or square grid in ivory, parchment, white, or midnight blue. Dotted paper uses a clean, regular grid.
+- **Paper:** plain, dotted, ruled, or square grid in ivory, parchment, white, or midnight blue. Grid mode starts in midnight blue and adds pages as you draw past their edges.
 
 Hover over the small circle at the top to reveal the pen controls. The sidebar holds scrolls, paper settings, and file controls. Both stay out of the writing area when closed.
 
@@ -33,7 +33,7 @@ ScrollMind opens on a connected Wacom display when available. Its screen selecto
 
 Scrolls save automatically in `~/Documents/ScrollMind` (`Documents\ScrollMind` on Windows), with recovery snapshots. Open scrolls and the active view return after restarting. On Windows, shutting down, restarting, or logging off waits for the final save. No account or cloud service is required.
 
-Export an editable **.sm** file, vector **SVG**, or paginated **PDF**. Opening an .sm file creates a working copy in a new scroll and preserves the original file.
+Scrolls and Grids have separate workspaces. Export editable Scrolls as **.sm** and editable Grids as **.smg**, or export either as vector **SVG** or paginated **PDF**. Opening a native file creates a working copy in its workspace.
 
 See the [controls guide](docs/CONTROLS.md) for pen buttons, keyboard shortcuts (Ctrl on Windows), and scroll management, or the [native format reference](docs/SCROLL-FORMAT.md) for storage and recovery details.
 

@@ -3,7 +3,7 @@
 const { app, BrowserWindow, Menu, ipcMain, screen, clipboard, shell, dialog, session } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { createWorkspace } = require('./workspace.cjs');
+const { createDocumentWorkspaces } = require('./documents.cjs');
 const { createDocumentIO } = require('./document-io.cjs');
 const { findScrollArgument, commandForInput } = require('./launch-args.cjs');
 
@@ -72,28 +72,31 @@ function createMenu() {
       { label: 'Quit ScrollMind', accelerator: 'Cmd+Q', click: requestClose },
     ] }] : []),
     { label: 'File', submenu: [
-      action('New Scroll', 'new-scroll'),
-      action('Open Scroll…', 'open-sm'),
-      { label: 'Export Scroll', submenu: [action('ScrollMind (.sm)…', 'export-sm'), action('SVG (.svg)…', 'export-svg'), action('PDF (.pdf)…', 'export-pdf')] },
+      action('New', 'new-scroll'),
+      action('Open…', 'open-sm'),
+      { label: 'Export', submenu: [action('ScrollMind (.sm / .smg)…', 'export-sm'), action('SVG (.svg)…', 'export-svg'), action('PDF (.pdf)…', 'export-pdf')] },
       { type: 'separator' },
       { label: 'Open Writing Folder', click: async () => { await fs.mkdir(dataDirectory, { recursive: true }); await shell.openPath(dataDirectory); } },
       { type: 'separator' },
-      action('Close Scroll', 'close-scroll', { accelerator: 'CmdOrCtrl+W' }),
-      action('Delete Scroll', 'delete-scroll'),
+      action('Close Document', 'close-scroll', { accelerator: 'CmdOrCtrl+W' }),
+      action('Delete Document', 'delete-scroll'),
       ...(process.platform !== 'darwin' ? [{ label: 'Quit', accelerator: 'Alt+F4', click: requestClose }] : []),
     ] },
     { label: 'Edit', submenu: [
       action('Undo', 'undo'), action('Redo', 'redo'), { type: 'separator' },
       action('Cut', 'cut'), action('Copy', 'copy'), action('Paste', 'paste'),
       action('Select All', 'select-all'), action('Delete Selection', 'delete'),
-      { type: 'separator' }, action('Clear Current Scroll', 'clear-scroll'),
+      { type: 'separator' }, action('Clear Current Document', 'clear-scroll'),
     ] },
     { label: 'View', submenu: [
       action('Pen', 'tool-pen'), action('Eraser', 'tool-eraser'),
       action('Rectangle Selection', 'tool-select'), action('Hand', 'tool-hand'),
       { type: 'separator' },
+      action('Zoom In', 'zoom-in'), action('Zoom Out', 'zoom-out'), action('Actual Size', 'zoom-reset'),
+      { type: 'separator' },
       action('Show / Hide Toolbar', 'toggle-toolbar'), action('Go to Start', 'home'),
-      action('Show / Hide Sections', 'toggle-sidebar'),
+      action('Show / Hide Sidebar', 'toggle-sidebar'),
+      action('Scrolls', 'view-scroll'), action('Grids', 'view-grid'),
       action('Add Section', 'add-section'), action('Add Marker', 'add-marker'), action('Add Page Break', 'add-page-break'),
       { label: 'Toggle Full Screen', click: () => setFullscreen(!isFullscreen()) },
     ] },
@@ -118,6 +121,7 @@ function installHandlers() {
     return store.saveChanges(changes);
   });
   handle('workspace:state', () => store.workspaceState());
+  handle('workspace:switch', kind => store.switchWorkspace(kind));
   handle('workspace:new', (options) => store.newScroll(options));
   handle('workspace:select', (id) => store.selectScroll(id));
   handle('workspace:close', (id) => store.closeScroll(id));
@@ -173,7 +177,7 @@ const windowIcon = (() => { const file = path.join(__dirname, '../../build/icon.
 
 async function createWindow() {
   const { validateSnapshot } = await import('../core/model.mjs');
-  store = createWorkspace(dataDirectory, { validate: validateSnapshot });
+  store = createDocumentWorkspaces(dataDirectory, { validate: validateSnapshot });
   documents = createDocumentIO({ getStore: () => store, getWindow: () => window, dataDirectory, testing });
   const display = preferredDisplay();
   window = new BrowserWindow({
@@ -262,7 +266,7 @@ app.on('open-file', (event, file) => {
 if (!ownsInstance) app.quit();
 else {
   app.on('second-instance', (_event, argv, workingDirectory) => {
-    const file = process.platform === 'win32' ? findScrollArgument(argv, workingDirectory) : argv.find(value => value.toLowerCase().endsWith('.sm'));
+    const file = findScrollArgument(argv, workingDirectory);
     if (file) { pendingOpenPaths.push(file); if (rendererReady) send('open-sm'); }
     if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
   });

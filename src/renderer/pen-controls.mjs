@@ -1,3 +1,6 @@
+import { DEFAULT_PALETTE } from '../core/palette.mjs';
+import { inkOnPaper } from '../core/paper.mjs';
+
 const clamp = (n, min = 0, max = 1) => Math.max(min, Math.min(max, n));
 
 function rgbToHSV(hex) {
@@ -15,7 +18,7 @@ function hsvToRGB({ h, s, v }) {
 const hexFromHSV = value => `#${hsvToRGB(value).map(channel => channel.toString(16).padStart(2, '0')).join('')}`;
 
 /** The pen UI stays out of the way until a deliberate hover or keyboard focus. */
-export function createPenControls({ onColor, focusCanvas }) {
+export function createPenControls({ onColor, onPalette, focusCanvas }) {
   const root = document.querySelector('#pen-controls');
   const toggle = document.querySelector('#pen-controls-toggle');
   const toolbar = document.querySelector('#toolbar');
@@ -24,6 +27,11 @@ export function createPenControls({ onColor, focusCanvas }) {
   const wheel = document.querySelector('#color-wheel');
   const valueInput = document.querySelector('#color-value');
   const hexInput = document.querySelector('#color-hex');
+  const swatches = [...document.querySelectorAll('#colors .swatch')];
+  const slot = document.querySelector('#palette-slot');
+  const swatchName = document.querySelector('#palette-name');
+  const resetPalette = document.querySelector('#palette-reset');
+  let currentPalette = DEFAULT_PALETTE, paletteTone;
   let hoverTimer, closeTimer, pointerPosition = null, interacting = false;
   let hsv = rgbToHSV('#243746'), selectedColor = '#243746', wheelPointer = null;
   const size = Math.round(220 * Math.min(3, devicePixelRatio || 1));
@@ -133,6 +141,38 @@ export function createPenControls({ onColor, focusCanvas }) {
     if (document.activeElement !== hexInput) hexInput.value = selectedColor;
     drawWheel();
   }
+  function resetName() { swatchName.value = currentPalette[Number(slot.value)].name; }
+
+  function refreshPalette(customPalette, tone) {
+    const palette = customPalette ?? DEFAULT_PALETTE;
+    if (palette !== currentPalette || !slot.options.length) {
+      const index = Number(slot.value) || 0;
+      currentPalette = palette;
+      swatches.forEach((button, i) => {
+        const { name, color } = palette[i];
+        button.dataset.color = color;
+        button.title = name;
+        button.setAttribute('aria-label', name + ' ink');
+      });
+      slot.replaceChildren(...palette.map(({ name, color }, i) => new Option(name + ' · ' + color, i)));
+      slot.selectedIndex = index;
+      resetName();
+      resetPalette.disabled = !customPalette;
+      paletteTone = undefined;
+    }
+    if (paletteTone !== tone) {
+      swatches.forEach((button, i) => button.style.setProperty('--swatch', inkOnPaper(palette[i].color, tone)));
+      paletteTone = tone;
+    }
+  }
+  slot.addEventListener('change', resetName);
+  document.querySelector('#palette-save').addEventListener('click', () => {
+    const index = Number(slot.value);
+    const name = swatchName.value.trim() || 'Color ' + (index + 1);
+    onPalette(currentPalette.map((swatch, i) => i === index ? { name, color: selectedColor } : swatch));
+  });
+  resetPalette.addEventListener('click', () => onPalette(undefined));
+
   function emitColor() { const color = hexFromHSV(hsv); selectedColor = color; onColor(color); refreshColor(color); }
   function chooseWheel(event) {
     const box = wheel.getBoundingClientRect();
@@ -182,5 +222,5 @@ export function createPenControls({ onColor, focusCanvas }) {
   hexInput.addEventListener('blur', () => { hexInput.value = selectedColor; hexInput.removeAttribute('aria-invalid'); });
 
   refreshColor(selectedColor);
-  return { open, close, refreshColor, toggleVisibility() { close(); root.hidden = !root.hidden; } };
+  return { open, close, refreshColor, refreshPalette, toggleVisibility() { close(); root.hidden = !root.hidden; } };
 }

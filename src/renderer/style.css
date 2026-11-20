@@ -14,3 +14,164 @@ body.sidebar-open #sidebar-toggle{left:312px}
 #pen-type{width:96px;flex-shrink:0;height:34px;margin:0 1px;padding:6px 8px;border:0;border-radius:8px;font-size:11px;background:transparent}.broad{width:12px;height:12px}
 
 body.sidebar-open #pen-controls #toolbar button{width:32px}body.sidebar-open #pen-controls #toolbar #colors button{width:25px}body.sidebar-open #shape-select{width:100px}body.sidebar-open #pen-type{width:85px}
+
+body {
+	color: var(--ink);
+}
+body.night {
+	--navy: #b7d5f4;
+	--ink: #edf2f7;
+	--quiet: #b5c8d7;
+	--line: #536d83;
+}
+.night :is(.eyebrow, .marker-remove, #selection-hint) {
+	color: var(--quiet);
+}
+.night :is(.sidebar-links button, .marker-go) {
+	color: var(--navy);
+}
+.night button:hover:enabled,
+.night .scroll-go[aria-current=page],
+.night .marker-row input:focus {
+	background: #b7d5f41c;
+}
+.night :is(#status.error, #save-alert, .scroll-files > button.danger, .scroll-delete) {
+	color: #ffaea7;
+}
+.night #colors .black { --swatch: #e5eaf1; }
+.night #colors .purple { --swatch: #be9bdf; }
+.night #toolbar #colors .swatch::after { box-shadow: inset 0 0 0 1px #ffffff32; }
+
+.canvas-mode {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 3px;
+	padding: 3px;
+	margin-bottom: 17px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+}
+.canvas-mode button {
+	padding: 8px;
+	border-radius: 7px;
+	font-size: 12px;
+	font-weight: 600;
+}
+#grid-settings {
+	padding-top: 5px;
+}
+#grid-settings fieldset {
+	min-width: 0;
+	border: 0;
+	margin: 13px 0 0;
+	padding: 0;
+}
+#grid-settings legend {
+	color: var(--ink);
+	padding: 0;
+	font-size: 11px;
+}
+.grid-dimensions {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+}
+.grid-dimensions label {
+	margin: 5px 0 0;
+}
+.grid-dimensions input {
+	display: block;
+	width: 100%;
+	margin-top: 4px;
+	padding: 6px 8px;
+	border: 1px solid var(--line);
+	border-radius: 7px;
+	background: var(--panel);
+	color: var(--ink);
+}
+#grid-shapes {
+	display: flex;
+	flex: none;
+	align-items: center;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+}
+#pen-controls #toolbar #diagram-shape {
+	width: auto;
+	min-width: 70px;
+	height: 32px;
+	padding: 0 8px;
+	font-size: 11px;
+	border-radius: 7px 0 0 7px;
+}
+#diagram-shape-select {
+	appearance: none;
+	width: 25px;
+	height: 32px;
+	padding: 0 6px;
+	border: 0;
+	border-left: 1px solid var(--line);
+	border-radius: 0 7px 7px 0;
+	text-align: center;
+	cursor: pointer;
+}
+.canvas-zoom {
+	display: grid;
+	grid-template-columns: 32px 54px 32px;
+	justify-content: center;
+	gap: 3px;
+	margin: -8px 0 12px;
+}
+.canvas-zoom button {
+	border-radius: 6px;
+	height: 27px;
+	font-variant-numeric: tabular-nums;
+}
+#zoom-out, #zoom-in {
+	font-size: 16px;
+}
+#zoom-reset {
+	font-size: 11px;
+	color: var(--quiet);
+}
+
+#palette-editor {
+	border-top: 1px solid var(--line);
+	padding-top: 10px;
+	margin-top: 12px;
+}
+.palette-field {
+	display: grid;
+	grid-template-columns: 52px minmax(0, 1fr);
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 6px;
+}
+#palette-editor label { margin: 0; }
+#palette-editor select, #palette-editor input {
+	width: 100%;
+	min-width: 0;
+	padding: 5px 6px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--panel);
+	color: var(--ink);
+	font: inherit;
+	font-size: 11px;
+}
+.palette-actions {
+	display: flex;
+	gap: 4px;
+	margin-top: 10px;
+}
+.palette-actions button {
+	flex: 1;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	padding: 6px 4px;
+	font-size: 10px;
+}
+.palette-actions button:first-child {
+	color: var(--navy);
+	font-weight: 600;
+}

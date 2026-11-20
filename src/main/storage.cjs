@@ -6,7 +6,10 @@ const crypto = require('node:crypto');
 const { DatabaseSync, backup: sqliteBackup } = require('node:sqlite');
 
 const APPLICATION_ID = 0x534d4e44; // SMND
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
+const GRID_FORMAT = Object.freeze({ applicationId: 0x534d4752, version: 1, ext: 'smg', name: 'grid' });
+const SCROLL_FORMAT = Object.freeze({ applicationId: APPLICATION_ID, version: SCHEMA_VERSION, ext: 'sm', name: 'scroll' });
+const formatFor = kind => kind === 'grid' ? GRID_FORMAT : SCROLL_FORMAT;
 const MAX_FILE_BYTES = 1024 * 1024 * 1024;
 const BACKUP_INTERVAL = 5 * 60 * 1000;
 const MAX_STROKES = 100_000;
@@ -69,16 +72,16 @@ async function exists(file) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-function verifySchema(db) {
-  if (db.prepare('PRAGMA application_id').get().application_id !== APPLICATION_ID) {
-    throw new UnsupportedScrollError('This file is not a ScrollMind scroll.');
+function verifySchema(db, format) {
+  if (db.prepare('PRAGMA application_id').get().application_id !== format.applicationId) {
+    throw new UnsupportedScrollError(`This file is not a ScrollMind ${format.name}.`);
   }
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (![1, 2, SCHEMA_VERSION].includes(version)) {
+  if (version < 1 || version > format.version) {
     throw new UnsupportedScrollError('This scroll uses an unsupported format version. Update ScrollMind before opening it.');
   }
   for (const [table, originalColumns] of Object.entries(COLUMNS)) {
-    const columns = table === 'strokes' && version >= 2 ? [...originalColumns, 'pen_type'] : originalColumns;
+    const columns = table === 'strokes' && hasPenType(format, version) ? [...originalColumns, 'pen_type'] : originalColumns;
     const actual = db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name);
     if (actual.length !== columns.length || columns.some((column, index) => column !== actual[index])) {
       throw new Error('The scroll database has a damaged table layout.');
@@ -91,31 +94,34 @@ function verifySchema(db) {
   return version;
 }
 
-function snapshotFromDatabase(db, validate) {
-  const version = verifySchema(db);
+function hasPenType(format, version) { return format === GRID_FORMAT || version >= 2; }
+
+function snapshotFromDatabase(db, validate, format) {
+  const version = verifySchema(db, format);
   const metadata = new Map(db.prepare('SELECT key, value FROM metadata').all().map((row) => [row.key, JSON.parse(row.value)]));
   if (!metadata.has('view') || !metadata.has('settings')) throw new Error('The scroll is missing its settings.');
-  const rows = db.prepare(`SELECT id, color, width, points, ${version >= 2 ? 'pen_type' : 'NULL AS pen_type'} FROM strokes ORDER BY order_index, rowid LIMIT 100001`).all();
+  const rows = db.prepare(`SELECT id, color, width, points, ${hasPenType(format, version) ? 'pen_type' : 'NULL AS pen_type'} FROM strokes ORDER BY order_index, rowid LIMIT 100001`).all();
   const markers = db.prepare('SELECT id, y, label, kind FROM markers ORDER BY y, rowid LIMIT 10001').all().map((row) => ({ ...row }));
   return validate({
     version: 1,
     strokes: rows.map((row) => ({ id: row.id, color: row.color, width: row.width, points: JSON.parse(row.points), ...(row.pen_type === null ? {} : { penType: row.pen_type }) })),
-    markers, view: metadata.get('view'), settings: metadata.get('settings'),
+    markers, view: metadata.get('view'), settings: metadata.get('settings'), diagram: metadata.get('diagram'),
   });
 }
 
-async function readNative(file, validate) {
+async function readNative(file, validate, format) {
   if ((await fs.stat(file)).size > MAX_FILE_BYTES) throw new Error('The scroll is too large to open safely.');
   const db = new DatabaseSync(file, { readOnly: true, allowExtension: false });
   try {
     db.exec('PRAGMA trusted_schema=OFF; PRAGMA query_only=ON;');
-    return snapshotFromDatabase(db, validate);
+    return snapshotFromDatabase(db, validate, format);
   } finally { db.close(); }
 }
 
-function createStore(directory, { validate } = {}) {
-  const filePath = path.join(directory, 'scroll.sm');
-  const backupPath = path.join(directory, 'scroll.backup.sm');
+function createStore(directory, { validate, kind } = {}) {
+  const format = formatFor(kind);
+  const filePath = path.join(directory, `${format.name}.${format.ext}`);
+  const backupPath = path.join(directory, `${format.name}.backup.${format.ext}`);
   const legacyPath = path.join(directory, 'notebook.scrollmind.json');
   const legacyBackupPath = path.join(directory, 'notebook.backup.json');
   let queue = Promise.resolve();
@@ -140,6 +146,10 @@ function createStore(directory, { validate } = {}) {
 
   async function ensureValidator() {
     const core = await import('../core/model.mjs');
+    if (format === GRID_FORMAT && !boundsOf) {
+      const validateDocument = validate || core.validateSnapshot;
+      validate = document => validateDocument({ ...document, settings: { ...document.settings, mode: 'grid' } });
+    }
     validate ||= core.validateSnapshot;
     boundsOf ||= core.boundsOf;
   }
@@ -150,7 +160,7 @@ function createStore(directory, { validate } = {}) {
       order: snapshot.strokes.map((stroke) => stroke.id),
       indices: new Map(snapshot.strokes.map((stroke, index) => [stroke.id, index])),
       pointCount: snapshot.strokes.reduce((total, stroke) => total + stroke.points.length, 0),
-      markers: snapshot.markers, view: snapshot.view, settings: snapshot.settings,
+      markers: snapshot.markers, view: snapshot.view, settings: snapshot.settings, diagram: snapshot.diagram,
     };
   }
 
@@ -158,6 +168,7 @@ function createStore(directory, { validate } = {}) {
     return {
       version: 1, strokes: model.order.map((id) => model.entries.get(id).stroke),
       markers: model.markers, view: model.view, settings: model.settings,
+      ...(model.diagram ? { diagram: model.diagram } : {}),
     };
   }
 
@@ -172,22 +183,21 @@ function createStore(directory, { validate } = {}) {
     db.exec('PRAGMA trusted_schema=OFF; PRAGMA busy_timeout=5000;');
     if (create) {
       db.exec(`BEGIN IMMEDIATE;
-        PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${SCHEMA_VERSION};
+        PRAGMA application_id=${format.applicationId}; PRAGMA user_version=${format.version};
         CREATE TABLE strokes (id TEXT PRIMARY KEY, order_index INTEGER NOT NULL, color TEXT NOT NULL, width REAL NOT NULL, points TEXT NOT NULL, bounds TEXT NOT NULL, pen_type TEXT DEFAULT NULL);
         CREATE INDEX strokes_order ON strokes(order_index);
         CREATE TABLE markers (id TEXT PRIMARY KEY, y REAL NOT NULL, label TEXT NOT NULL, kind TEXT NOT NULL);
         CREATE INDEX markers_position ON markers(y);
         CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         COMMIT;`);
-    } else if (db.prepare('PRAGMA user_version').get().user_version === 1) {
+    } else if (format === SCROLL_FORMAT && db.prepare('PRAGMA user_version').get().user_version === 1) {
       // Native v1 styles remain NULL, preserving legacy pressure appearance.
       db.exec('BEGIN IMMEDIATE');
       try {
         db.exec(`ALTER TABLE strokes ADD COLUMN pen_type TEXT DEFAULT NULL; PRAGMA user_version=${SCHEMA_VERSION}; COMMIT;`);
       } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
-    } else if (db.prepare('PRAGMA user_version').get().user_version === 2) {
-      // The same columns now support highlighter ink. Older readers must see a
-      // future format and refuse it instead of treating new brush data as damage.
+    } else if (db.prepare('PRAGMA user_version').get().user_version < format.version) {
+      // New metadata and brush types share the existing table layout.
       db.exec('BEGIN IMMEDIATE');
       try { db.exec(`PRAGMA user_version=${SCHEMA_VERSION}; COMMIT;`); }
       catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
@@ -235,7 +245,7 @@ function createStore(directory, { validate } = {}) {
   async function refreshBackup() {
     await writeBackup(backupPath);
     lastBackupAt = Date.now();
-    backupHasWriting = model.entries.size > 0 || model.markers.length > 0;
+    backupHasWriting = hasWriting();
     dirtySinceBackup = false;
     nextBackupAttemptAt = 0;
     backupWarning = false;
@@ -253,6 +263,7 @@ function createStore(directory, { validate } = {}) {
       markers: changes.markers === undefined ? [] : changes.markers,
       view: changes.view === undefined ? model.view : changes.view,
       settings: changes.settings === undefined ? model.settings : changes.settings,
+      diagram: changes.diagram,
     });
     const prepared = [];
     const newIds = [];
@@ -296,18 +307,22 @@ function createStore(directory, { validate } = {}) {
       }
       statements.metadata.run('view', JSON.stringify(partial.view));
       statements.metadata.run('settings', JSON.stringify(partial.settings));
+      if (changes.diagram !== undefined) statements.metadata.run('diagram', JSON.stringify(partial.diagram ?? { nodes: [], connections: [] }));
       db.exec('COMMIT');
     } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
     for (const id of removed) model.entries.delete(id);
     for (const entry of prepared) model.entries.set(entry.stroke.id, { stroke: entry.stroke, points: entry.points });
     model.order = order; model.indices = indices; model.pointCount = pointCount;
     model.markers = nextMarkers; model.view = partial.view; model.settings = partial.settings;
+    if (changes.diagram !== undefined) model.diagram = partial.diagram;
     dirtySinceBackup = true;
   }
 
+  function hasWriting() { return model.entries.size > 0 || model.markers.length > 0 || Boolean(model.diagram?.nodes.length); }
+
   async function maybeBackup() {
     if (Date.now() < nextBackupAttemptAt) return;
-    if (!lastBackupAt || Date.now() - lastBackupAt >= BACKUP_INTERVAL || (!backupHasWriting && (model.entries.size > 0 || model.markers.length > 0))) {
+    if (!lastBackupAt || Date.now() - lastBackupAt >= BACKUP_INTERVAL || (!backupHasWriting && hasWriting())) {
       // The transaction is already durable. A maintenance failure must not make the
       // renderer treat a committed import as rejected and keep editing stale data.
       try { await refreshBackup(); }
@@ -355,15 +370,15 @@ function createStore(directory, { validate } = {}) {
       let createdThisLoad = false;
       try {
         if (await exists(filePath)) {
-          try { snapshot = await readNative(filePath, validate); }
+          try { snapshot = await readNative(filePath, validate, format); }
           catch (error) {
             if (error.code === 'UNSUPPORTED_SCROLL') throw error;
-            snapshot = await readNative(backupPath, validate);
+            snapshot = await readNative(backupPath, validate, format);
             await preserveCorrupt();
             recovered = true;
           }
-        } else if (await exists(backupPath)) { snapshot = await readNative(backupPath, validate); recovered = true; }
-        else {
+        } else if (await exists(backupPath)) { snapshot = await readNative(backupPath, validate, format); recovered = true; }
+        else if (format === SCROLL_FORMAT) {
           const legacy = await legacySnapshot();
           if (legacy) { snapshot = legacy.document; recovered = legacy.recovered; migrated = true; }
         }
@@ -371,7 +386,7 @@ function createStore(directory, { validate } = {}) {
           createdThisLoad = true;
           openWritable(true);
           setModel(validate({ version: 1, strokes: [] }));
-          applyChanges(snapshot ? { upserts: snapshot.strokes, order: snapshot.strokes.map((stroke) => stroke.id), markers: snapshot.markers, view: snapshot.view, settings: snapshot.settings } : {});
+          applyChanges(snapshot ? { upserts: snapshot.strokes, order: snapshot.strokes.map((stroke) => stroke.id), markers: snapshot.markers, view: snapshot.view, settings: snapshot.settings, diagram: snapshot.diagram } : {});
         } else { openWritable(); setModel(snapshot); }
         if (snapshot) await refreshBackup();
         return { document: snapshot ? structuredClone(currentSnapshot()) : null, recovered, ...(migrated ? { migrated: true } : {}) };
@@ -396,7 +411,7 @@ function createStore(directory, { validate } = {}) {
       const normalized = validate(copy);
       const incoming = new Set(normalized.strokes.map((stroke) => stroke.id));
       const removals = model.order.filter((id) => !incoming.has(id));
-      applyChanges({ upserts: normalized.strokes, removals, order: normalized.strokes.map((stroke) => stroke.id), markers: normalized.markers, view: normalized.view, settings: normalized.settings });
+      applyChanges({ upserts: normalized.strokes, removals, order: normalized.strokes.map((stroke) => stroke.id), markers: normalized.markers, view: normalized.view, settings: normalized.settings, diagram: normalized.diagram ?? { nodes: [], connections: [] } });
       await maybeBackup();
     });
   }
@@ -404,7 +419,7 @@ function createStore(directory, { validate } = {}) {
   function flush() { return enqueue(() => { if (db && !closed && !blocked) db.exec('PRAGMA wal_checkpoint(PASSIVE)'); }); }
   function getSnapshot() { return enqueue(() => { requireWritable(); return structuredClone(currentSnapshot()); }); }
   function exportFile(destination) { return enqueue(async () => { requireWritable(); await writeBackup(await assertExportDestination(destination)); }); }
-  function importFile(source) { return enqueue(async () => { await ensureValidator(); return readNative(source, validate); }); }
+  function importFile(source) { return enqueue(async () => { await ensureValidator(); return readNative(source, validate, format); }); }
   function close() {
     return enqueue(async () => {
       if (!db || closed) return;
@@ -417,4 +432,4 @@ function createStore(directory, { validate } = {}) {
   return { load, save, saveChanges, flush, getSnapshot, exportFile, backup: exportFile, importFile, close, filePath, backupPath };
 }
 
-module.exports = { createStore, basicValidate, APPLICATION_ID, SCHEMA_VERSION };
+module.exports = { formatFor, createStore, basicValidate, APPLICATION_ID, SCHEMA_VERSION };

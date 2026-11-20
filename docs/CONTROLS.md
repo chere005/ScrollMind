@@ -8,19 +8,24 @@ Choose **Pen**, **Pencil**, **Fountain**, **Marker**, or **Highlighter**, then a
 
 Highlighter starts with Yellow and Broad width. Its translucent strokes keep writing visible: a continuous pass has uniform opacity, including where it overlaps itself, while separate strokes build color. During the session, switching back restores your previous ink color and width.
 
-The eight swatches are Black, Yellow, Blue, Green, Red, Orange, Purple, and White. The color wheel adds hue, saturation, brightness, and six-digit hex input. Your pen type, width, and color save with the scroll.
+Each Scroll and Grid saves its own eight swatches. Open **Color palette and wheel** from the pen bar, choose a color with the wheel or hex field, then pick a swatch and choose **Save current color**. You can name each swatch or restore the default palette.
 
-The shape dropdown offers Line, Arrow, Rectangle, Ellipse, and Triangle. Choose one and drag on the page. Hold Shift for straight angles, squares, circles, or an equilateral triangle. Shapes can be selected and edited like handwriting.
+In Scroll mode the shape dropdown offers Line, Arrow, Rectangle, Ellipse, and Triangle. Choose one and drag on the page. Hold Shift to constrain the drawing. These shapes are editable like handwriting.
+
+In Grid mode the left half of the shape button reuses the last picked shape. The arrow on its right offers Rectangle, Oval, Triangle, Trapezoid, and Cylinder. Click the canvas for a standard size or drag to size the new shape. Drag the body to move it or a corner to resize it. Drag a round handle to another shape to attach a routed arrow. The arrow updates when you move or resize a shape. Select an arrow or shape and press Delete to remove it.
 
 ## Mouse and keyboard
 
 Shortcuts are shown for macOS. On Windows, use Ctrl for ⌘ and Shift for ⇧; the app shows the Windows names. Windows has no menu bar, so every action is in the sidebar or on a shortcut below.
 
+The mouse selects and moves by default. Choose Pen or press B to draw with it. The stylus writes by default. Choose Rectangle Selection or press V to use the stylus for selection and movement.
+
 | Action | Control |
 | --- | --- |
 | Pen / Eraser / Rectangle selection / Hand | B / E / V / H |
 | Scroll vertically | Mouse wheel or trackpad |
-| Pan vertically | Space + drag or middle-button drag |
+| Pan | Space + drag or middle-button drag. Grid mode pans in both directions. |
+| Zoom | Ctrl + wheel, trackpad pinch, ⌘ + / ⌘ −, or the sidebar’s zoom buttons |
 | Select handwriting | Drag a rectangle across strokes |
 | Move selection | Drag inside its box |
 | Resize selection | Drag a corner; Shift keeps its shape |
@@ -28,7 +33,7 @@ Shortcuts are shown for macOS. On Windows, use Ctrl for ⌘ and Shift for ⇧; t
 | Copy / Cut / Paste | ⌘C / ⌘X / ⌘V |
 | Duplicate / Select all | ⌘D / ⌘A |
 | Delete selection | Delete or Backspace |
-| Undo / Redo | ⌘Z / ⌘⇧Z (Windows also Ctrl+Y) |
+| Undo / Redo | ⌘Z / ⌘⇧Z (Windows also Ctrl+Y). Double-click the middle button to redo. |
 | Sidebar / Pen controls | ⌘/ / Tab |
 | Return to start | ⌘0 |
 | Full screen | ⌘⇧F or F11 (Windows: Ctrl+Shift+F or F11) |
@@ -48,6 +53,8 @@ ScrollMind responds to the standard mouse-button actions assigned in the Wacom d
 
 A single button click does nothing. Pressing the erase button during an existing stroke does not erase until you lift and touch down again. Each erase drag ends when the tip lifts and undoes together. Erasing and scrolling do not count as double-click commands. The toolbar eraser and a pen's rear eraser also erase continuously on contact.
 
+While hovering, tap lower then upper to select and drag with the next tip contact. Put the tip on ink or a Grid shape and move it. Lift the tip to return to the previous tool. Holding and dragging the upper button pans. Use the sidebar zoom buttons, a trackpad pinch, or Ctrl + wheel to zoom.
+
 Useful ExpressKey assignments are ⌘Z, ⌘⇧Z, B, E, V, H, and Tab (Ctrl+Z and Ctrl+Y on Windows). A ring or strip assigned to vertical scrolling moves along the page. ScrollMind does not change the driver's assignments.
 
 ### Windows
@@ -57,30 +64,33 @@ In **Wacom Tablet Properties**, keep **Use Windows Ink** turned on so the pen re
 The driver's **Side Switch Mode** decides which pen-button features work:
 
 - **Click & Tap** (recommended): with the lower switch on **Right Click**, hold it and touch or drag the tip across strokes to erase. The driver sends no clicks while hovering, so hover double-click undo/redo is unavailable. Assign ExpressKeys (or the upper switch as a keystroke) to **Ctrl+Z** and **Ctrl+Y** instead.
-- **Hover Click**: with the lower switch on **Right Click** and the upper switch on **Middle Click**, double-clicking while hovering undoes (lower) or redoes (upper). Use **E** or the pen's rear eraser to erase.
+- **Hover Click**: with the lower switch on **Right Click** and the upper switch on **Middle Click**, double-clicking while hovering undoes (lower) or redoes (upper). Tapping lower then upper arms a drag for the next tip contact. Use **E** or the pen's rear eraser to erase.
 
 In either mode, **Middle Click** on the upper switch scrolls when held and dragged.
 
 ## Paper and navigation
 
-Open the sidebar for plain, dotted, ruled, or square-grid paper in ivory, parchment, white, or midnight blue. Dotted paper uses one regular grid without parchment grain.
+Switch between **Scrolls** and **Grids** at the top of the sidebar. Each workspace keeps its own open documents. Scrolls offer plain, dotted, ruled, or square-grid ruling. Parchment has an even background.
 
-**Section**, **Marker**, and **Page break** add navigation points at the middle of the view. Edit their names directly and press Enter to finish. Their symbols jump to the saved place; × removes them. Undo restores removed points. Page breaks also control PDF pagination.
+In Scroll mode, **Section**, **Marker**, and **Page break** add navigation points at the middle of the view. Edit their names and press Enter to finish. Their symbols jump to the saved place, and × removes them. Undo restores removed points. Page breaks control Scroll PDF pagination.
+
+In Grid mode, set the number of square rows and columns in a block and the number of block rows and columns on a page. Draw or move content past a page edge to extend the grid in that direction.
 
 The screen selector chooses the writing display. Mirrored displays show the same app; independent screen placement requires an extended desktop.
 
-## Manage and export scrolls
+## Manage and export documents
 
-**New Scroll** adds another scroll. Select a name to switch, use its pencil button to rename, or × to close. Closed scrolls remain in **Other scrolls**. Each open scroll keeps its own undo history during the session, and the workspace returns after restart.
+**+ New** adds a document to the current workspace. Select a name to switch, use its pencil button to rename, or × to close. Reopen closed documents from **Other scrolls** or **Other grids**. Each document keeps its own undo history during the session, and the workspace returns after restart.
 
-The trash button deletes a scroll from the workspace and keeps a recoverable copy in `~/Documents/ScrollMind/Deleted Scrolls` (`Documents\ScrollMind\Deleted Scrolls` on Windows). **Clear Scroll** removes all writing, sections, markers, and page breaks from the current scroll in one undoable action, keeping paper settings and other scrolls. Without a menu bar, Windows uses the sidebar buttons for these actions.
+The trash button keeps a recoverable copy under **Deleted Scrolls** or **Grids / Deleted Grids** in the writing folder. **Clear current scroll** and **Clear current grid** remove the current document’s content in one undoable action.
 
-**Open Scroll**, or opening an .sm file with ScrollMind, adds an editable working copy and preserves its source. **Export Scroll** offers:
+**Open** adds an editable working copy to the matching workspace. Use the export buttons for these formats.
 
 | Format | Contents |
 | --- | --- |
-| .sm | Editable strokes, pressure, pen styles, paper settings, and navigation points |
-| SVG | Vector artwork for the continuous scroll |
-| PDF | Paginated artwork with manual page breaks |
+| .sm | Editable Scroll ink, settings, and navigation points |
+| .smg | Editable Grid ink, shapes, connections, and Grid settings |
+| SVG | Vector artwork for the selected mode |
+| PDF | Scroll page breaks or one sheet per Grid page |
 
 Scrolls save automatically before switching or quitting. See the [native format reference](SCROLL-FORMAT.md) for files, backups, and recovery.

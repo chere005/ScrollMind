@@ -349,7 +349,7 @@ function createV2(file, snapshot) {
   });
 }
 
-test('managed schema2 advances to schema3 without rewriting legacy or typed stroke rows', async (t) => {
+test('managed schema2 advances without rewriting legacy or typed stroke rows', async (t) => {
   const { store } = await temporary(t);
   const original = document('legacy-v2');
   original.strokes.push({ ...stroke('explicit-pen'), penType: 'pen' }, { ...stroke('fountain-v2'), penType: 'fountain' });
@@ -359,11 +359,11 @@ test('managed schema2 advances to schema3 without rewriting legacy or typed stro
   inspect(store.filePath, db => db.exec('CREATE TABLE migration_edits (id TEXT); CREATE TRIGGER migration_update AFTER UPDATE ON strokes BEGIN INSERT INTO migration_edits VALUES (NEW.id); END;'));
   assert.deepEqual((await store.load()).document, original);
   inspect(store.filePath, db => {
-    assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
+    assert.equal(db.prepare('PRAGMA user_version').get().user_version, SCHEMA_VERSION);
     assert.deepEqual(db.prepare('SELECT id,points,pen_type FROM strokes ORDER BY order_index').all().map(row => ({ ...row })), before);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM migration_edits').get().n, 0);
   });
-  assert.equal(inspect(store.backupPath, db => db.prepare('PRAGMA user_version').get().user_version), 3);
+  assert.equal(inspect(store.backupPath, db => db.prepare('PRAGMA user_version').get().user_version), SCHEMA_VERSION);
 });
 
 test('readonly schema2 import retains source bytes, explicit pen types, and legacy omission', async (t) => {
