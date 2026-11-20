@@ -353,6 +353,7 @@ function penShortcut(event) {
       clientX: event.clientX, clientY: event.clientY,
     }) : null;
   if (!action || (event.pointerType === 'mouse' && action !== 'redo')) return false;
+  trace(`action ${action}`);
   finishGesture();
   if (action === 'zoom-next') {
     zoomNextTip = true;
@@ -466,6 +467,7 @@ function pointerDown(event) {
   if (event.button === 2 && event.pointerType !== 'pen') return;
   const currentTool = eventTool(event);
   const barrelErase = currentTool === 'eraser' && barrelDelete(event);
+  if (event.pointerType === 'pen') trace(`down tool=${currentTool} B=${event.buttons} tipStarted=${event.tipStarted} contact=${contact(event)}`);
   if (barrelErase ? !event.tipStarted : currentTool !== 'hand' && !contact(event)) return;
   if (event.tipStarted) zoomNextTip = false;
   event.preventDefault(); overlay.focus({ preventScroll: true });
@@ -553,6 +555,7 @@ function updatePan(event) {
 function finishGesture(cancel = false) {
   if (!active) return;
   const gesture = active; active = null; let modified = false;
+  if (gesture.kind !== 'ink') trace(`end ${gesture.kind}${cancel ? ' cancelled' : ''}`);
   if (gesture.kind === 'ink' && gesture.points.length) modified = scroll.add([makeStroke(gesture.points, gesture.color, gesture.width, gesture.penType)]);
   else if (!cancel && gesture.kind === 'shape' && gesture.preview.length) modified = scroll.add(gesture.preview);
   else if (!cancel && gesture.kind === 'draw-node') {
@@ -582,13 +585,26 @@ function pointerUp(event) {
   } else if (['draw-node', 'move-node', 'resize-node', 'connect'].includes(active.kind)) updateDiagramGesture(event);
   finishGesture();
 }
+// What the page receives from the pen and what the app does with it goes to pen.log, so a button that seems wrong can be read back.
+const trace = text => bridge.penLog?.(text);
+let lastMove = '', lastWheel = 0, wheelBurst = 0;
+function traceEvent(raw) {
+  const brief = `${raw.pointerType} B=${raw.buttons}`;
+  if (raw.type === 'pointermove' || raw.type === 'pointerenter') { if (brief === lastMove) return; lastMove = brief; }
+  trace(`dom ${raw.type} ${brief} btn=${raw.button} p=${Number(raw.pressure ?? 0).toFixed(2)} id=${raw.pointerId} @${Math.round(raw.clientX)},${Math.round(raw.clientY)}`);
+}
 function handlePointer(rawEvent) {
   if (!loaded || loadError || fileOperation || rawEvent.pointerType === 'touch') return;
+  traceEvent(rawEvent);
   route(penInput.update(rawEvent));
 }
 // The display's own report of its side switches. The state is always kept; the buttons act only while this window has focus.
 function handleNativePen(state) {
-  for (const event of penInput.native(state)) if ((document.hasFocus() || testMode) && loaded && !loadError && !fileOperation) route(event);
+  for (const event of penInput.native(state)) {
+    const routed = (document.hasFocus() || testMode) && loaded && !loadError && !fileOperation;
+    trace(`native ${event.type} ${event.button === 2 ? 'lower' : 'upper'} B=${event.buttons} focus=${document.hasFocus()} routed=${routed}`);
+    if (routed) route(event);
+  }
 }
 bridge.onNativePen?.(handleNativePen);
 function route(event) {
@@ -609,7 +625,9 @@ for (const type of ['pointerenter', 'pointerdown', 'pointermove', 'pointerup']) 
 function resetShortcuts() {
   penInput.reset(); penShortcuts.reset(); middleClicks.reset(); zoomNextTip = false; lastPointerType = null;
 }
+overlay.addEventListener('contextmenu', () => trace('dom contextmenu'));
 overlay.addEventListener('pointercancel', event => {
+  trace(`dom pointercancel ${event.pointerType} id=${event.pointerId}`);
   // Only the pointer being dragged can abort its drag. A pen hovering near the display or a resting palm must not snap the work back.
   if (event.pointerType === 'touch' || (active && event.pointerId !== active.nativePointerId)) return;
   resetShortcuts(); finishGesture(true); updateCursor();
@@ -619,6 +637,11 @@ overlay.addEventListener('lostpointercapture', event => {
 });
 overlay.addEventListener('wheel', event => {
   event.preventDefault();
+  {
+    const at = performance.now();
+    if (at - lastWheel > 500) { if (wheelBurst) trace(`dom wheel x${wheelBurst}`); wheelBurst = 0; trace(`dom wheel dy=${Math.round(event.deltaY)} dx=${Math.round(event.deltaX)} mode=${event.deltaMode} upperHeld=${penInput.upperHeld} active=${active?.kind ?? 'none'}`); }
+    wheelBurst++; lastWheel = at;
+  }
   // The driver scrolling while the upper button is down is not a tap of it.
   if (penInput.upperHeld) penShortcuts.cancel();
   if (active || fileOperation || !loaded || loadError) return;

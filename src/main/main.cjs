@@ -52,6 +52,7 @@ let nativePen = null;
 function forwardNativePen(state) {
   if (window && !window.isDestroyed()) window.webContents.send('pen:native', state);
 }
+ipcMain.on('pen:log', (_event, text) => logPen('page', String(text).slice(0, 240)));
 function startNativePen() {
   // Tests drive the same path by hand: app.evaluate(() => globalThis.scrollmindNativePen({ lower, upper, tip, range })).
   if (testing) { globalThis.scrollmindNativePen = forwardNativePen; return; }

@@ -15,6 +15,7 @@ const buttonBit = button => [TIP, UPPER, LOWER][button] ?? 0;
 export class PenInput {
 	#sample = null;
 	#hid = { lower: false, upper: false };
+	#range = false;
 	#nativePointerId = null;
 	#nativeButtons = 0;
 	#mouseButtons = 0;
@@ -48,6 +49,7 @@ export class PenInput {
 	 * Contact stays with the page's own pen events.
 	 */
 	native(state, now = performance.now()) {
+		this.#range = state?.range === true;
 		const events = [];
 		for (const [key, button] of [['lower', 2], ['upper', 1]]) {
 			const held = state?.[key] === true;
@@ -68,8 +70,17 @@ export class PenInput {
 
 	#merged() { return ((this.#nativeButtons | this.#mouseButtons | this.#hidButtons()) & ~TIP) | (this.#tipDown ? TIP : 0); }
 
+	/** The display says a pen is over it. */
+	get inRange() { return this.#range; }
+
+	/**
+	 * Is this mouse-class event the pen's? It is when it lands where the pen was just seen. A pen that hovers still sends the
+	 * page nothing, so while the display reports the pen in range the time limit does not apply: a button tapped after a pause
+	 * is still the pen's, and neither opens a context menu nor counts as a mouse click.
+	 */
 	isNear(event, now = performance.now()) {
-		return this.#sample && now - this.#sample.time <= MOUSE_NEAR_PEN_MS
+		if (!this.#sample) return this.#range;
+		return (this.#range || now - this.#sample.time <= MOUSE_NEAR_PEN_MS)
 			&& Math.hypot(event.clientX - this.#sample.x, event.clientY - this.#sample.y) <= MOUSE_NEAR_PEN_PX;
 	}
 

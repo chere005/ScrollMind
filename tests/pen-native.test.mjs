@@ -169,3 +169,21 @@ test('with no pen seen yet the first switch change still reports, and reset forg
 	assert.equal(input.upperHeld, false);
 	assert.equal(input.update(hover(5, 5), 20).buttons, 0);
 });
+
+test('a pen the display reports in range owns the mouse-class events at its position however long it has hovered still', () => {
+	const input = new PenInput();
+	input.update(hover(400, 300), 1000);
+	const click = (x, y) => ({ type: 'pointerdown', pointerType: 'mouse', pointerId: 1, clientX: x, clientY: y, buttons: 2, button: 2 });
+	assert.equal(input.isNear(click(400, 300), 3000), false, 'a pause longer than the time limit, display silent');
+	input.native({ range: true }, 1600);
+	assert.equal(input.inRange, true);
+	assert.equal(input.isNear(click(400, 300), 9000), true, 'in range: still the pen');
+	assert.equal(input.isNear(click(400, 340), 9000), false, 'a mouse that is somewhere else is a mouse');
+	assert.equal(input.update(click(402, 301), 9100).pointerType, 'pen', 'the lower button tapped after a long hover is the pen\'s');
+	input.native({ range: false }, 9500);
+	assert.equal(input.isNear(click(400, 300), 20000), false, 'out of range: back to the time limit');
+	assert.equal(new PenInput().isNear(click(1, 1)), false);
+	const fresh = new PenInput();
+	fresh.native({ range: true }, 5);
+	assert.equal(fresh.isNear(click(1, 1), 10), true, 'in range, the page has not seen the pen move yet');
+});

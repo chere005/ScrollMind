@@ -1676,6 +1676,19 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await strokes()).toHaveLength(2);
 		});
 
+		test('display buttons: a lower tap after a long still hover opens no context menu, but a mouse right click away from the pen does', async () => {
+			await native({ range: true });
+			const rightClick = (x, y) => page.evaluate(([x, y]) => document.querySelector('#overlay').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y })), [x, y]);
+			await pointer('pointermove', 600, 400, { pressure: 0, buttons: 0, button: -1 });
+			await page.waitForTimeout(1500);
+			await rightClick(600, 400);
+			await expect(page.locator('#context-menu')).toBeHidden();
+			await native({});
+			await page.waitForTimeout(100);
+			await rightClick(600, 400);
+			await expect(page.locator('#context-menu')).toBeVisible();
+		});
+
 		test('display buttons: the driver scrolling while the upper switch is down scrolls the page and is not a tap', async () => {
 			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 			const written = await strokes();
