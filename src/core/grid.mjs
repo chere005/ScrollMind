@@ -14,6 +14,11 @@ export function gridPage(grid) {
 	};
 }
 
+export function gridStartView(grid, visibleWidth, visibleHeight) {
+	const page = gridPage(grid);
+	return { x: (page.width - visibleWidth) / 2, y: (page.height - visibleHeight) / 2 };
+}
+
 export function gridBounds(grid, ...boxes) {
 	const page = gridPage(grid);
 	let left = 0, top = 0, right = page.width, bottom = page.height;

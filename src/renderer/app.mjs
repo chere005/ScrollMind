@@ -6,7 +6,7 @@ import { brushWidth, brushCap, brushOpacity } from '../core/brushes.mjs';
 import { strokeGeometry } from '../core/stroke-geometry.mjs';
 import { createPenControls } from './pen-controls.mjs';
 import { localizeShortcut } from '../core/shortcut-labels.mjs';
-import { DEFAULT_GRID, GRID_LIMIT, DIAGRAM_SHAPES, diagramBounds, diagramRoutes, gridBounds, routeConnection, shapePorts } from '../core/grid.mjs';
+import { DEFAULT_GRID, GRID_LIMIT, DIAGRAM_SHAPES, diagramBounds, diagramRoutes, gridBounds, gridStartView, routeConnection, shapePorts } from '../core/grid.mjs';
 import { TONES as tones, paperTone, inkOnPaper } from '../core/paper.mjs';
 import { paintGrid, paintDiagram, paintShapeHandles, diagramHit, drawShapeBox, resizeShapeBox } from './grid-canvas.mjs';
 
@@ -33,7 +33,8 @@ if (platform !== 'darwin') {
 let dragNextTip = false, lastPointerType = null;
 let scroll = new Scroll();
 let settings = { color: '#171717', width: 3, paper: 'plain', paperTone: 'ivory' };
-let offsetY = 0, scrollX = 0, gridX = 0, gridY = 0, scrollZoom = 1, gridZoom = 1;
+let offsetY = 0, scrollX = 0, scrollZoom = 1, gridZoom = 1;
+let gridX, gridY;
 let tool = 'pen', mousePen = false, selection = new Set(), active = null;
 let diagramSelection = null;
 let spaceDown = false, loaded = false, loadError = null;
@@ -63,13 +64,14 @@ const penControls = createPenControls({
 const gridMode = () => workspace.kind === 'grid';
 const documentTitle = () => gridMode() ? 'Grid' : 'Scroll';
 const sessionKey = (state = workspace, id = state.activeId) => state.kind + ':' + id;
-const viewX = () => gridMode() ? gridX : scrollX;
-const viewY = () => gridMode() ? gridY : offsetY;
 const zoomLevel = () => gridMode() ? gridZoom : scrollZoom;
 const viewWidth = () => width / zoomLevel();
 const viewHeight = () => height / zoomLevel();
-const savedView = () => ({ offsetY, scrollX, gridX, gridY, scrollZoom, gridZoom });
 const gridSettings = () => settings.grid ?? DEFAULT_GRID;
+const gridStart = () => gridStartView(gridSettings(), viewWidth(), viewHeight());
+const viewX = () => gridMode() ? gridX ?? gridStart().x : scrollX;
+const viewY = () => gridMode() ? gridY ?? gridStart().y : offsetY;
+const savedView = () => ({ offsetY, scrollX, gridX, gridY, scrollZoom, gridZoom });
 const diagramShape = () => gridSettings().shape ?? 'rectangle';
 const gridInputs = [...document.querySelectorAll('[data-grid-size]')];
 let cachedDiagram, cachedRoutes, cachedStrokes, cachedInkBounds;
@@ -183,9 +185,10 @@ function setOffset(value, persist = true, x = viewX()) {
 function zoomAt(value, x = width / 2, y = height / 2) {
   const previous = zoomLevel(), next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value));
   if (previous === next) return;
+  const originX = viewX(), originY = viewY();
   if (gridMode()) gridZoom = next; else scrollZoom = next;
   const delta = 1 / previous - 1 / next;
-  setOffset(viewY() + y * delta, true, viewX() + x * delta);
+  setOffset(originY + y * delta, true, originX + x * delta);
 }
 function resize() {
   width = innerWidth; height = innerHeight; ratio = devicePixelRatio || 1;
@@ -602,7 +605,11 @@ async function command(value, detail) {
   }
   else if (value === 'duplicate') duplicateSelection(); else if (value === 'delete') deleteSelection();
   else if (value === 'select-all') { finishGesture(); tool = 'select'; diagramSelection = null; selection = new Set(scroll.strokes.map(stroke => stroke.id)); updateControls(); requestRender(); }
-  else if (value === 'home') { finishGesture(); setOffset(0, true, 0); } else if (value === 'fullscreen') await bridge.toggleFullscreen();
+  else if (value === 'home') {
+    finishGesture();
+    const start = gridMode() ? gridStart() : { x: 0, y: 0 };
+    setOffset(start.y, true, start.x);
+  } else if (value === 'fullscreen') await bridge.toggleFullscreen();
   else if (value === 'help') { finishGesture(); $('#help').showModal(); }
   else if (value === 'toggle-toolbar') penControls.toggleVisibility();
   else if (value === 'toggle-sidebar') toggleSidebar(); else if (value.startsWith('add-')) addMarker(value.slice(4));
@@ -614,7 +621,11 @@ function cacheScrollSession() {
   });
 }
 function restoreView(view = {}) {
-  offsetY = view.offsetY ?? 0; scrollX = view.scrollX ?? 0; gridX = view.gridX ?? 0; gridY = view.gridY ?? 0;
+  offsetY = view.offsetY ?? 0; scrollX = view.scrollX ?? 0;
+  // Older saves omitted zero coordinates even when they had a saved pan or zoom.
+  const positioned = view.gridX !== undefined || view.gridY !== undefined || (view.gridZoom ?? 1) !== 1;
+  gridX = positioned ? view.gridX ?? 0 : undefined;
+  gridY = positioned ? view.gridY ?? 0 : undefined;
   scrollZoom = view.scrollZoom ?? 1; gridZoom = view.gridZoom ?? 1;
 }
 function activateScroll(result) {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Notebook, validateSnapshot } from '../src/core/model.mjs';
-import { gridBounds, diagramRoutes, routeConnection, shapePaths } from '../src/core/grid.mjs';
+import { gridBounds, gridStartView, diagramRoutes, routeConnection, shapePaths } from '../src/core/grid.mjs';
 import { exportSVG, exportPDFHTML } from '../src/core/export.mjs';
 
 const grid = { cellRows: 2, cellColumns: 2, blockRows: 2, blockColumns: 2, paperTone: 'night' };
@@ -10,6 +10,19 @@ const box = (kind, x, y, width = 40, height = 32) => ({ kind, x, y, width, heigh
 test('grid expands by complete pages to every edge and keeps alignment on negative coordinates', () => {
 	assert.deepEqual(gridBounds(grid), { x: 0, y: 0, width: 96, height: 96 });
 	assert.deepEqual(gridBounds(grid, { x: -20, y: -5, width: 140, height: 112 }), { x: -96, y: -96, width: 288, height: 288 });
+});
+
+test('the first Grid page is centered in wide and narrow viewports', () => {
+	assert.deepEqual(gridStartView(grid, 192, 144), { x: -48, y: -24 });
+	assert.deepEqual(gridStartView(grid, 48, 64), { x: 24, y: 16 });
+});
+
+test('a saved zero Grid offset remains distinct from the default view', () => {
+	const notebook = new Notebook();
+	const settings = { mode: 'grid', grid };
+	assert.deepEqual(notebook.snapshot({}, settings).view, { offsetY: 0 });
+	const saved = notebook.snapshot({ gridX: 0, gridY: 0 }, settings);
+	assert.deepEqual(validateSnapshot(saved).view, { offsetY: 0, gridX: 0, gridY: 0 });
 });
 
 test('attached orthogonal routes avoid an intervening shape and are derived from the live node geometry', () => {

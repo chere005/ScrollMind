@@ -83,7 +83,8 @@ function normalizeView(value = {}) {
   const view = { offsetY: finite(value.offsetY ?? 0, 'Vertical position') };
   for (const name of ['scrollX', 'gridX', 'gridY']) {
     const offset = finite(value[name] ?? 0, 'Canvas position');
-    if (offset) view[name] = offset;
+    // An absent Grid position follows the centered start. An explicit zero is a saved position.
+    if (offset || (name !== 'scrollX' && value[name] != null)) view[name] = offset;
   }
   for (const name of ['scrollZoom', 'gridZoom']) {
     const zoom = finite(value[name] ?? 1, 'Canvas scale', MIN_ZOOM, MAX_ZOOM);

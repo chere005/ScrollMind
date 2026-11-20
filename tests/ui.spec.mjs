@@ -3,6 +3,7 @@ import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/pro
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
+import { gridPage } from '../src/core/grid.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -1265,14 +1266,23 @@ test('grid controls, page growth, diagram editing and native persistence work to
 		const context = document.querySelector('#canvas').getContext('2d');
 		return [...context.getImageData(x * devicePixelRatio, y * devicePixelRatio, 1, 1).data];
 	}, [x, y]);
-	await expect.poll(() => pixel(881, 561)).toEqual([23, 44, 64, 255]);
+	const pageSize = gridPage((await snapshot()).settings.grid);
+	const { x, y } = await page.evaluate(size => ({ x: (innerWidth - size.width) / 2, y: (innerHeight - size.height) / 2 }), pageSize);
+	const outside = [23, 44, 64, 255], inside = [27, 51, 73, 255];
+	await expect.poll(() => Promise.all([
+		pixel(x - 6, y + 6), pixel(x + 6, y - 6), pixel(x + 6, y + 6),
+		pixel(x + pageSize.width + 6, y + 6), pixel(x + 6, y + pageSize.height + 6),
+	])).toEqual([outside, outside, inside, outside, outside]);
+	await page.locator('#overlay').dispatchEvent('wheel', { deltaX: x, deltaY: y });
+	expect((await snapshot()).view).toMatchObject({ gridX: 0, gridY: 0 });
+	await expect.poll(() => pixel(881, 561)).toEqual(outside);
 	await clickPenControl('#diagram-shape');
 	await drag({ x: 320, y: 245 }, { x: 450, y: 335 });
 
 	await openPenControls();
 	await page.locator('#diagram-shape-select').selectOption('cylinder');
 	await drag({ x: 815, y: 390 }, { x: 930, y: 475 });
-	await expect.poll(() => pixel(881, 561)).toEqual([27, 51, 73, 255]);
+	await expect.poll(() => pixel(881, 561)).toEqual(inside);
 	await expect.poll(async () => (await snapshot()).diagram.nodes.map(node => node.kind)).toEqual(['rectangle', 'cylinder']);
 
 	await clickPenControl('#diagram-shape');
@@ -1310,6 +1320,8 @@ test('grid controls, page growth, diagram editing and native persistence work to
 	await closeGracefully();
 	await launch();
 	expect(await snapshot()).toEqual(expected);
+	await page.keyboard.press('Home');
+	await expect.poll(async () => (await snapshot()).view).toMatchObject({ gridX: -x, gridY: -y });
 	await openPenControls();
 	await expect(page.locator('#diagram-shape')).toHaveText('Cylinder');
 });
