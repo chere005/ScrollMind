@@ -1330,7 +1330,7 @@ test('grid controls, page growth, diagram editing and native persistence work to
 	await expect(page.locator('#diagram-shape')).toHaveText('Cylinder');
 });
 
-test('Grid accepts pen ink, mixed Wacom barrel erasing, and one-shot shape dragging', async () => {
+test('Grid accepts pen ink, mixed Wacom barrel erasing, and mixed barrel clicks that arm zoom', async () => {
 	await showSidebar();
 	await page.locator('#grid-mode').click();
 	await expect(page.locator('#sidebar-heading')).toHaveText('Grids');
@@ -1370,10 +1370,14 @@ test('Grid accepts pen ink, mixed Wacom barrel erasing, and one-shot shape dragg
 	await mouse('pointerup', 0, 2, 640, 495);
 	await pointer('pointerdown', 640, 495, { pressure: 0, buttons: 4, button: 1 });
 	await pointer('pointerup', 640, 495, { pressure: 0, buttons: 0, button: 1 });
+	// Lower then upper arms tap-and-drag zoom, not a move: the shape stays where it is.
+	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
 	await pointer('pointerdown', 640, 495);
-	await pointer('pointermove', 700, 525, { button: -1 });
-	await pointer('pointerup', 700, 525, { pressure: 0, buttons: 0 });
-	expect((await snapshot()).diagram.nodes[0]).toEqual({ ...shape, x: shape.x + 60, y: shape.y + 30 });
+	await pointer('pointermove', 640, 530, { button: -1 });
+	await pointer('pointermove', 640, 565, { button: -1 });
+	await pointer('pointerup', 640, 565, { pressure: 0, buttons: 0 });
+	expect((await snapshot()).diagram.nodes[0]).toEqual(shape);
+	expect((await snapshot()).view.gridZoom).toBeGreaterThan(1);
 	expect((await snapshot()).strokes).toEqual(initial);
 
 	await showSidebar();
@@ -1385,6 +1389,8 @@ test('Grid accepts pen ink, mixed Wacom barrel erasing, and one-shot shape dragg
 	await expect(page.locator('#grid-mode')).toHaveAttribute('aria-pressed', 'true');
 	expect((await snapshot()).strokes).toEqual(initial);
 
+	await page.locator('#zoom-reset').click();
+	await expect(page.locator('#zoom-reset')).toHaveText('100%');
 	await page.locator('#zoom-in').click();
 	await expect(page.locator('#zoom-reset')).toHaveText('125%');
 	await page.locator('#zoom-reset').click();
