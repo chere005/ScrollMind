@@ -132,6 +132,7 @@ function createDocumentWorkspaces(directory, options) {
 		load, switchWorkspace, openScroll, saveChanges, assertExportDestination, exportFile,
 		save: document => enqueue(() => active().save(document)),
 		getSnapshot: () => enqueue(() => active().getSnapshot()),
+		get filePath() { return active().filePath; },
 		workspaceState: () => tagged({ workspace: active().workspaceState() }).workspace,
 		newScroll: activeCommand('newScroll'),
 		selectScroll: activeCommand('selectScroll'),
