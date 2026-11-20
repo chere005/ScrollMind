@@ -28,7 +28,7 @@ Both app and helper entitlements allow V8 JIT. The release verifier rejects unsi
 
 ## Updates
 
-The app updates itself from this repository's GitHub releases with `electron-updater`. `build.publish` names the feed, and electron-builder writes it into `Contents/Resources/app-update.yml`; the release script refuses an app without it. The release script also writes `dist/latest-mac.yml` from the ZIP's real SHA-512 and size.
+The app updates itself from this repository's GitHub releases with `electron-updater`. `build.publish` and the checked-in `build/app-update.yml` (copied into `Contents/Resources/app-update.yml` by `build.extraResources`, because electron-builder writes none for a `dir` build) name the feed; the release script refuses an app without it. The release script also writes `dist/latest-mac.yml` from the ZIP's real SHA-512 and size.
 
 To publish a macOS release, upload the ZIP first and `latest-mac.yml` last, under that exact name. Never overwrite the assets of a published release; to withdraw a bad one, return it to draft so the previous release is Latest again, then ship the next minor. Squirrel.Mac only accepts an update signed by the same Developer ID as the running app, and only the Developer ID signed build in a writable location updates itself. Windows updates need `latest.yml` (written by `npm run release:win`) uploaded after the installer, and are untested without a Windows machine.
 

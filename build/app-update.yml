@@ -1,0 +1,4 @@
+provider: github
+owner: chere005
+repo: ScrollMind
+updaterCacheDirName: scrollmind-updater

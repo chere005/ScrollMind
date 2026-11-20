@@ -30,6 +30,12 @@
       "src/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "build/app-update.yml",
+        "to": "app-update.yml"
+      }
+    ],
     "mac": {
       "icon": "build/icon.png",
       "category": "public.app-category.productivity",
