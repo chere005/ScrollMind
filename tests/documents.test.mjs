@@ -9,7 +9,7 @@ import { Notebook } from '../src/core/model.mjs';
 import { DEFAULT_GRID } from '../src/core/grid.mjs';
 
 const require = createRequire(import.meta.url);
-const { createDocumentWorkspaces } = require('../src/main/documents.cjs');
+const { createDocumentWorkspaces, documentKind } = require('../src/main/documents.cjs');
 const { createWorkspace } = require('../src/main/workspace.cjs');
 const { formatFor } = require('../src/main/storage.cjs');
 
@@ -56,15 +56,24 @@ test('Grids have a separate workspace, SQLite format, native export and working-
 	await store.exportFile(scrollFile);
 	inspectFormat(scrollFile, 'scroll');
 	assert.deepEqual((await store.switchWorkspace('grid')).document, snapshot);
-	const gridFile = path.join(root, 'Diagrams.smg');
+	const gridFile = path.join(root, 'Diagrams.sm');
 	await store.exportFile(gridFile);
 	inspectFormat(gridFile, 'grid');
 	inspectFormat(path.join(root, 'Grids', 'grid.smg'), 'grid');
 	await assert.rejects(store.exportFile(path.join(root, 'scroll.sm')), /different export file/);
 
-	const misleading = path.join(root, 'Misnamed.sm');
-	await fs.copyFile(gridFile, misleading);
-	await assert.rejects(store.openScroll(misleading), /not a ScrollMind scroll/);
+	// A .sm file is a Scroll or a Grid by its contents; .smg is only what early Grid files were called.
+	const early = path.join(root, 'Early.smg');
+	const scrollNamedSmg = path.join(root, 'Notes.smg');
+	const text = path.join(root, 'Plain.sm');
+	await fs.copyFile(gridFile, early);
+	await fs.copyFile(scrollFile, scrollNamedSmg);
+	await fs.writeFile(text, 'not a database');
+	assert.deepEqual(await Promise.all([gridFile, scrollFile, early, scrollNamedSmg, text].map(documentKind)), ['grid', 'scroll', 'grid', 'scroll', 'scroll']);
+	assert.equal((await store.openScroll(scrollNamedSmg)).workspace.kind, 'scroll');
+	assert.equal((await store.openScroll(early)).workspace.kind, 'grid');
+	await assert.rejects(store.openScroll(text), /not a database/);
+	await assert.rejects(store.openScroll(path.join(root, 'Notes.txt')), /Choose a ScrollMind file/);
 	const imported = await store.openScroll(gridFile);
 	assert.equal(imported.workspace.kind, 'grid');
 	assert.equal(imported.workspace.scrolls.find(item => item.active).name, 'Diagrams');
@@ -121,7 +130,7 @@ test('native documents persist custom palettes independently and new documents s
 	await store.save(blank.snapshot({}, { mode: 'grid', palette: gridPalette }));
 	const grid = await store.getSnapshot();
 	assert.deepEqual(grid.settings.palette[0], { name: 'Water', color: '#5cb9e6' });
-	const file = path.join(root, 'Palette.smg');
+	const file = path.join(root, 'Palette.sm');
 	await store.exportFile(file);
 	assert.deepEqual((await store.openScroll(file)).document.settings.palette, grid.settings.palette);
 	assert.equal((await store.newScroll({ settings: grid.settings })).document.settings.palette, undefined);

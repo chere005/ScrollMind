@@ -16,7 +16,7 @@ ScrollMind checks the GitHub releases a few seconds after it opens and every 12 
 
 ### Windows
 
-The Windows version requires **Windows 10 or later (x64)**. Run **ScrollMind-Setup-<version>.exe**, the Windows installer published with a release or built locally with `npm run build:win`. It installs for the current user and needs no administrator rights. Open .sm and .smg files in Explorer with ScrollMind.
+The Windows version requires **Windows 10 or later (x64)**. Run **ScrollMind-Setup-<version>.exe**, the Windows installer published with a release or built locally with `npm run build:win`. It installs for the current user and needs no administrator rights. Open .sm files in Explorer with ScrollMind.
 
 The installer is **unsigned**. If SmartScreen blocks it, choose **More info**, then **Run anyway**.
 
@@ -37,7 +37,7 @@ ScrollMind opens on a connected Wacom display when available. Its screen selecto
 
 Scrolls save automatically in `~/Documents/ScrollMind` (`Documents\ScrollMind` on Windows), with recovery snapshots. Open scrolls and the active view return after restarting. On Windows, shutting down, restarting, or logging off waits for the final save. No account or cloud service is required.
 
-Scrolls and Grids have separate workspaces. Export editable Scrolls as **.sm** and editable Grids as **.smg**, or export either as vector **SVG** or paginated **PDF**. Opening a native file creates a working copy in its workspace.
+Scrolls and Grids have separate workspaces. Export an editable Scroll or Grid as a **.sm** file, which ScrollMind recognizes as either, or export either as vector **SVG** or paginated **PDF**. Opening a native file creates a working copy in its workspace.
 
 See the [controls guide](docs/CONTROLS.md) for pen buttons, keyboard shortcuts (Ctrl on Windows), and scroll management, or the [native format reference](docs/SCROLL-FORMAT.md) for storage and recovery details.
 

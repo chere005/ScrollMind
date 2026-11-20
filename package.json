@@ -46,12 +46,6 @@
         "name": "ScrollMind Scroll",
         "role": "Editor",
         "mimeType": "application/x-scrollmind"
-      },
-      {
-        "ext": "smg",
-        "name": "ScrollMind Grid",
-        "role": "Editor",
-        "mimeType": "application/x-scrollmind-grid"
       }
     ],
     "forceCodeSigning": true,

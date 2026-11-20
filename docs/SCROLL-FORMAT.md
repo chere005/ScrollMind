@@ -1,6 +1,6 @@
 # Native Scroll and Grid formats
 
-A **.sm** file is a ScrollMind Scroll database with editable ink, paper settings, the saved view, and navigation points. A **.smg** file is a ScrollMind Grid database with editable ink, shapes, connections, Grid settings, and its saved view. Export either document for sharing or backup. Working databases may have SQLite WAL companions. Exports include the committed contents.
+A **.sm** file is a ScrollMind database: either a Scroll (editable ink, paper settings, the saved view, and navigation points) or a Grid (editable ink, shapes, connections, Grid settings, and its saved view). The SQLite application ID says which, so ScrollMind opens either from its contents whatever the file is named. Early Grid files were named **.smg**; they still open. Export either document for sharing or backup. Working databases may have SQLite WAL companions. Exports include the committed contents.
 
 ## Files on disk
 
@@ -42,4 +42,4 @@ The optional `diagram` metadata stores `nodes` with shape IDs, types, bounds and
 
 Schema 1–3 files remain valid read-only import sources. Managed files upgrade transactionally, adding nullable `pen_type` with default `NULL` for schema 1 while preserving existing point JSON and legacy styles. Schema 3 added Highlighter support. Scroll schema 4 supports zoom. Earlier Grid previews stored hybrid documents in Scroll schema 4. When opening one, the app saves a separate Grid with the ink, shapes, and Grid settings, then removes the Grid fields from the managed Scroll. The Scroll keeps its ink and navigation points.
 
-Unsupported future versions are rejected and preserved. Native exports use SQLite's backup API and a rollback journal to produce independent .sm and .smg files.
+Unsupported future versions are rejected and preserved. Native exports use SQLite's backup API and a rollback journal to produce independent .sm files.

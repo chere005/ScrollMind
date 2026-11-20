@@ -119,7 +119,7 @@ function createMenu() {
     { label: 'File', submenu: [
       action('New', 'new-scroll'),
       action('Open…', 'open-sm'),
-      { label: 'Export', submenu: [action('ScrollMind (.sm / .smg)…', 'export-sm'), action('SVG (.svg)…', 'export-svg'), action('PDF (.pdf)…', 'export-pdf')] },
+      { label: 'Export', submenu: [action('ScrollMind (.sm)…', 'export-sm'), action('SVG (.svg)…', 'export-svg'), action('PDF (.pdf)…', 'export-pdf')] },
       { type: 'separator' },
       { label: 'Open Writing Folder', click: async () => { await fs.mkdir(dataDirectory, { recursive: true }); await shell.openPath(dataDirectory); } },
       { type: 'separator' },

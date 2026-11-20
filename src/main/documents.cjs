@@ -3,6 +3,18 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createWorkspace, atomicWrite } = require('./workspace.cjs');
+const { formatFor } = require('./storage.cjs');
+
+/** A .sm file is a Scroll or a Grid; its SQLite application ID says which, whatever the extension. */
+async function documentKind(file) {
+	const handle = await fs.open(file, 'r');
+	try {
+		const head = Buffer.alloc(72);
+		const { bytesRead } = await handle.read(head, 0, 72, 0);
+		const sqlite = bytesRead === 72 && head.toString('latin1', 0, 16) === 'SQLite format 3\0';
+		return sqlite && head.readUInt32BE(68) === formatFor('grid').applicationId ? 'grid' : 'scroll';
+	} finally { await handle.close(); }
+}
 
 function createDocumentWorkspaces(directory, options) {
 	const activeFile = path.join(directory, 'active-workspace');
@@ -98,8 +110,9 @@ function createDocumentWorkspaces(directory, options) {
 	function openScroll(file) {
 		return enqueue(async () => {
 			const extension = path.extname(file).toLowerCase();
-			if (!['.sm', '.smg'].includes(extension)) throw new TypeError('Choose a ScrollMind Scroll (.sm) or Grid (.smg).');
-			const next = extension === '.smg' ? 'grid' : 'scroll';
+			// .smg is what early Grid files were called; it opens like any .sm.
+			if (!['.sm', '.smg'].includes(extension)) throw new TypeError('Choose a ScrollMind file (.sm).');
+			const next = await documentKind(file);
 			await ensure(next);
 			const result = await workspaces[next].openScroll(file);
 			const split = next === 'scroll' ? await splitPreview(result) : null;
@@ -149,4 +162,4 @@ function createDocumentWorkspaces(directory, options) {
 	};
 }
 
-module.exports = { createDocumentWorkspaces };
+module.exports = { createDocumentWorkspaces, documentKind };

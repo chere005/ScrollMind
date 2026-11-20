@@ -80,8 +80,10 @@ function readNativeScroll(file) {
   const database = new DatabaseSync(file, { readOnly: true });
   try {
     expect(database.prepare('PRAGMA quick_check').get().quick_check).toBe('ok');
-    const grid = file.toLowerCase().endsWith('.smg');
-    expect(database.prepare('PRAGMA application_id').get().application_id).toBe(grid ? 0x534d4752 : 0x534d4e44);
+    // A .sm file is a Scroll or a Grid by its SQLite application ID, not its name.
+    const applicationId = database.prepare('PRAGMA application_id').get().application_id;
+    expect([0x534d4e44, 0x534d4752]).toContain(applicationId);
+    const grid = applicationId === 0x534d4752;
     const schema = database.prepare('PRAGMA user_version').get().user_version;
     expect(grid ? [1] : [1, 2, 3, 4]).toContain(schema);
     const metadata = Object.fromEntries(database.prepare('SELECT key, value FROM metadata').all().map(row => [row.key, JSON.parse(row.value)]));
@@ -1318,7 +1320,7 @@ test('grid controls, page growth, diagram editing and native persistence work to
 	expect(expected.view).toMatchObject({ gridX: 48, gridY: 48 });
 	await showSidebar();
 	await page.locator('#export-sm').click();
-	expect(readNativeScroll(await exportedPath('smg'))).toEqual(expected);
+	expect(readNativeScroll(await exportedPath('sm'))).toEqual(expected);
 	await closeGracefully();
 	await launch();
 	expect(await snapshot()).toEqual(expected);
@@ -1359,7 +1361,7 @@ test('Grid accepts pen ink, mixed Wacom barrel erasing, and one-shot shape dragg
 	await showSidebar();
 	await page.locator('#grid-mode').click();
 	await expect(page.locator('#sidebar-heading')).toHaveText('Grids');
-	await expect(page.locator('#export-sm')).toHaveText('ScrollMind Grid (.smg)');
+	await expect(page.locator('#export-sm')).toHaveText('ScrollMind Grid (.sm)');
 	await showSidebar(false);
 	await pointer('pointermove', 500, 400, { pressure: 0, buttons: 0, button: -1 });
 	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');

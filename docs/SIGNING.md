@@ -53,7 +53,7 @@ References: [Apple notarization](https://developer.apple.com/documentation/secur
 
 ## Windows
 
-The Windows installer is an unsigned, per-user NSIS package (`dist/ScrollMind-Setup-<version>.exe`) that needs no administrator rights. No Windows code-signing certificate is used, so SmartScreen may warn on first run. It registers the `.sm` and `.smg` file types. `build.win.forceCodeSigning` is `false`; the top-level `forceCodeSigning: true` still applies to macOS.
+The Windows installer is an unsigned, per-user NSIS package (`dist/ScrollMind-Setup-<version>.exe`) that needs no administrator rights. No Windows code-signing certificate is used, so SmartScreen may warn on first run. It registers the `.sm` file type. `build.win.forceCodeSigning` is `false`; the top-level `forceCodeSigning: true` still applies to macOS.
 
 `npm run release:win` runs the preflight checks, builds the installer, checks that the packaged app reports the package name and version, and writes the installer's SHA-256 file and a local release report marked unsigned in `dist/`. It starts no GitHub release or Actions run.
 

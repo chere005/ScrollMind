@@ -88,8 +88,7 @@ The trash button keeps a recoverable copy under **Deleted Scrolls** or **Grids /
 
 | Format | Contents |
 | --- | --- |
-| .sm | Editable Scroll ink, settings, and navigation points |
-| .smg | Editable Grid ink, shapes, connections, and Grid settings |
+| .sm | An editable Scroll (ink, settings, navigation points) or Grid (ink, shapes, connections, Grid settings) |
 | SVG | Vector artwork for the selected mode |
 | PDF | Scroll page breaks or one sheet per Grid page |
 

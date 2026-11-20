@@ -149,7 +149,7 @@ function updateControls() {
   $('#file-title').textContent = title + ' file';
   $('#open-sm').textContent = 'Open…';
   $('#export-label').textContent = 'Export ' + title;
-  $('#export-sm').textContent = gridMode() ? 'ScrollMind Grid (.smg)' : 'ScrollMind (.sm)';
+  $('#export-sm').textContent = gridMode() ? 'ScrollMind Grid (.sm)' : 'ScrollMind (.sm)';
   $('#clear-scroll').textContent = 'Clear current ' + title.toLowerCase();
   $('#data-folder').textContent = 'Open writing folder ↗';
   $('#new-scroll').title = 'New ' + title;
@@ -696,9 +696,9 @@ async function scrollFileCommand(value, detail) {
       const result = await bridge.renameScroll(detail.id, detail.name);
       workspace = result.workspace; renderScrolls();
     } else {
-      const format = value === 'export-sm' && gridMode() ? 'smg' : value.slice(7);
+      const format = value.slice(7);
       const result = await bridge.exportDocument(format, { width, height });
-      if (!result.canceled) message(`${format === 'sm' || format === 'smg' ? documentTitle() : format.toUpperCase()} export saved`);
+      if (!result.canceled) message(`${format === 'sm' ? documentTitle() : format.toUpperCase()} export saved`);
     }
   })();
   try { return await fileOperation; }

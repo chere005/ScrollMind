@@ -14,13 +14,13 @@ function createDocumentIO({ getStore, getWindow, dataDirectory, testing }) {
     return result;
   };
 
-  async function destination(format, title) {
+  async function destination(format, title, kindName) {
     if (testing) {
       if (!process.env.SCROLLMIND_EXPORT_DIR) return null;
       await fs.mkdir(process.env.SCROLLMIND_EXPORT_DIR, { recursive: true });
       return path.join(process.env.SCROLLMIND_EXPORT_DIR, `${title}.${format}`);
     }
-    const names = { sm: 'ScrollMind Scroll', smg: 'ScrollMind Grid', svg: 'SVG Drawing', pdf: 'PDF Document' };
+    const names = { sm: kindName, svg: 'SVG Drawing', pdf: 'PDF Document' };
     const exportDirectory = path.join(dataDirectory, 'Exports');
     await fs.mkdir(exportDirectory, { recursive: true });
     const result = await dialog.showSaveDialog(getWindow(), {
@@ -87,15 +87,14 @@ function createDocumentIO({ getStore, getWindow, dataDirectory, testing }) {
 
   function exportDocument(format, options = {}) {
     return serialize(async () => {
-      if (!['sm', 'smg', 'svg', 'pdf'].includes(format)) throw new TypeError('Choose ScrollMind, SVG, or PDF export.');
+      if (!['sm', 'svg', 'pdf'].includes(format)) throw new TypeError('Choose ScrollMind, SVG, or PDF export.');
       const store = getStore();
       const grid = store.workspaceState().kind === 'grid';
-      if (format === 'sm' || format === 'smg') format = grid ? 'smg' : 'sm';
-      const file = await destination(format, grid ? 'Grid' : 'Scroll');
+      const file = await destination(format, grid ? 'Grid' : 'Scroll', grid ? 'ScrollMind Grid' : 'ScrollMind Scroll');
       if (!file) return { canceled: true };
       if (store.assertExportDestination) await store.assertExportDestination(file);
       await store.flush();
-      if (format === 'sm' || format === 'smg') await store.exportFile(file);
+      if (format === 'sm') await store.exportFile(file);
       else {
         const { exportSVG, exportPDFHTML } = await import('../core/export.mjs');
         const document = await store.getSnapshot();
