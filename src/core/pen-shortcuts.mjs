@@ -1,7 +1,10 @@
 const DELETE_BUTTON = 2;
 const SCROLL_BUTTON = 4;
 const CONTACT_BUTTONS = 1 | 32;
-const MAX_CLICK_DURATION = 250;
+// A tap is a press of at most half a second in which the pen stays within a few millimeters: a thumb pressing a barrel
+// button takes that long and nudges the pen that much. Longer is a hold, farther is a drag.
+const MAX_CLICK_DURATION = 500;
+const TAP_MOVEMENT = 16;
 const PEN_CLICK_WINDOW = 400;
 const ZOOM_SEQUENCE_WINDOW = 700;
 export const PEN_CLICK_MOVEMENT = 8;
@@ -53,7 +56,9 @@ export class PenButtonShortcuts {
     }
     if (this.#candidate) {
       const window = this.#navigation && this.#candidate.button === DELETE_BUTTON ? ZOOM_SEQUENCE_WINDOW : PEN_CLICK_WINDOW;
-      if (now - this.#candidate.time > window) this.#candidate = null;
+      // The window runs from the first release to the START of the next press, so a slow second tap still counts.
+      const pressing = state?.press && state.press.time - this.#candidate.time <= window;
+      if (now - this.#candidate.time > window && !pressing) this.#candidate = null;
     }
     if (!state) {
       // A move received after entering the canvas can already have a button held.
@@ -76,7 +81,7 @@ export class PenButtonShortcuts {
     let action = null;
     if (state.press) {
       const press = state.press;
-      if (pressed || (buttons & ~press.button) || Math.hypot(x - press.x, y - press.y) > PEN_CLICK_MOVEMENT
+      if (pressed || (buttons & ~press.button) || Math.hypot(x - press.x, y - press.y) > TAP_MOVEMENT
         || now - press.time > MAX_CLICK_DURATION) {
         press.valid = false;
         this.#candidate = null;
@@ -85,7 +90,7 @@ export class PenButtonShortcuts {
         state.press = null;
         if (press.valid && buttons === 0) {
           const prior = this.#candidate?.pointerId === pointerId ? this.#candidate.button : null;
-          const doubleClick = prior === press.button && now - this.#candidate.time <= PEN_CLICK_WINDOW;
+          const doubleClick = prior === press.button && press.time - this.#candidate.time <= PEN_CLICK_WINDOW;
           const zoomSequence = this.#navigation && prior === DELETE_BUTTON && press.button === SCROLL_BUTTON;
           if (doubleClick || zoomSequence) {
             action = zoomSequence ? 'zoom-next' : press.button === DELETE_BUTTON ? 'undo' : 'redo';

@@ -1676,6 +1676,29 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await strokes()).toHaveLength(2);
 		});
 
+		test('display buttons: a slow double press that nudges the pen under the thumb still counts as a double tap', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await strokes()).toEqual([]);
+			await page.evaluate(async () => {
+				const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+				const overlay = document.querySelector('#overlay');
+				const move = (x, y) => overlay.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 44, pointerType: 'pen', isPrimary: true, clientX: x, clientY: y, pressure: 0, buttons: 0, button: -1 }));
+				move(500, 400);
+				for (let press = 0; press < 2; press++) {
+					window.scrollmindDebug.nativePen({ upper: true, range: true });
+					await wait(300);
+					move(509, 406);
+					await wait(100);
+					window.scrollmindDebug.nativePen({ range: true });
+					move(500, 400);
+					await wait(250);
+				}
+			});
+			await expect.poll(strokes).toEqual(written);
+		});
+
 		test('display buttons: a lower tap after a long still hover opens no context menu, but a mouse right click away from the pen does', async () => {
 			await native({ range: true });
 			const rightClick = (x, y) => page.evaluate(([x, y]) => document.querySelector('#overlay').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y })), [x, y]);

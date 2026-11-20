@@ -31,9 +31,9 @@ test('each nonoverlapping pair fires once; a third click starts a new pair', () 
 test('a long hold invalidates the preceding click rather than completing undo', () => {
   const shortcuts = new PenButtonShortcuts();
   click(shortcuts, 2, 0);
-  assert.equal(click(shortcuts, 2, 100, { duration: 251 }), null);
-  assert.equal(click(shortcuts, 2, 380), null);
-  assert.equal(click(shortcuts, 2, 470), 'undo');
+  assert.equal(click(shortcuts, 2, 100, { duration: 501 }), null);
+  assert.equal(click(shortcuts, 2, 700), null);
+  assert.equal(click(shortcuts, 2, 790), 'undo');
 });
 
 test('barrel-and-tip deletion taps and rear erasing never count as shortcut clicks', () => {
@@ -69,11 +69,11 @@ test('button chords invalidate both the press and the prior matching click', () 
   assert.equal(click(shortcuts, 2, 150), null);
 });
 
-test('panning past eight pixels and returning to the start still suppresses redo', () => {
+test('moving the pen past sixteen pixels and returning to the start still suppresses redo', () => {
   const shortcuts = new PenButtonShortcuts();
   click(shortcuts, 4, 0);
   shortcuts.update(event('pointerdown', 4), 100);
-  shortcuts.update(event('pointermove', 4, { clientY: 109 }), 110);
+  shortcuts.update(event('pointermove', 4, { clientY: 117 }), 110);
   shortcuts.update(event('pointermove', 4), 120);
   assert.equal(shortcuts.update(event('pointerup', 0), 130), null);
   assert.equal(click(shortcuts, 4, 150), null);
@@ -83,10 +83,10 @@ test('movement tolerance uses radial distance and includes release coordinates',
   const shortcuts = new PenButtonShortcuts();
   click(shortcuts, 4, 0);
   shortcuts.update(event('pointerdown', 4), 100);
-  assert.equal(shortcuts.update(event('pointerup', 0, { clientX: 106, clientY: 106 }), 140), null);
+  assert.equal(shortcuts.update(event('pointerup', 0, { clientX: 113, clientY: 113 }), 140), null);
   assert.equal(click(shortcuts, 4, 200), null);
   shortcuts.update(event('pointerdown', 4), 300);
-  assert.equal(shortcuts.update(event('pointerup', 0, { clientX: 108 }), 340), 'redo');
+  assert.equal(shortcuts.update(event('pointerup', 0, { clientX: 115 }), 340), 'redo');
 });
 
 test('an already-held button on the first unknown move is never mistaken for a press', () => {
@@ -137,10 +137,10 @@ test('cancel, blur, and reset remove incomplete presses and matching click state
   }
 });
 
-test('completed clicks expire after 400ms and backward timestamps cannot fire a stale shortcut', () => {
+test('a press must begin within 400ms of the previous release, and backward timestamps cannot fire a stale shortcut', () => {
   const shortcuts = new PenButtonShortcuts();
   click(shortcuts, 2, 0);
-  assert.equal(click(shortcuts, 2, 401), null);
+  assert.equal(click(shortcuts, 2, 441), null, 'the second press began 401 ms after the first release');
   assert.equal(click(shortcuts, 2, 500), 'undo');
   click(shortcuts, 2, 600);
   assert.equal(click(shortcuts, 2, 100), null);
@@ -149,8 +149,8 @@ test('completed clicks expire after 400ms and backward timestamps cannot fire a 
 
 test('the exact click-duration and double-click-window boundaries remain usable', () => {
   const shortcuts = new PenButtonShortcuts();
-  assert.equal(click(shortcuts, 4, 0, { duration: 250 }), null);
-  assert.equal(click(shortcuts, 4, 400, { duration: 250 }), 'redo');
+  assert.equal(click(shortcuts, 4, 0, { duration: 500 }), null);
+  assert.equal(click(shortcuts, 4, 900, { duration: 500 }), 'redo');
 });
 
 test('pressureContact: barrel taps with pressure never count as an undo double-click, hover clicks still do', () => {
