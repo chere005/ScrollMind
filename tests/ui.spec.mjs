@@ -1796,6 +1796,129 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await strokes()).toEqual(written);
 		});
 
+		// The Wacom One 12 also says where its pen is. While a side switch is held the pen is then the display's own, its tip and
+		// its place, and nothing is taken from what the driver makes of that switch: a right click, Pan/Scroll, or nothing at all.
+		const at = (x, y, state = {}) => native({ range: true, clientX: x, clientY: y, p: state.tip ? 0.6 : 0, ...state });
+
+		test('display pen: hold delete deletes nothing until the display says the tip touches, then only where it touches', async () => {
+			await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
+			await draw({ x: 200, y: 400 }, { x: 400, y: 400 });
+			await draw({ x: 200, y: 550 }, { x: 400, y: 550 });
+			const [first, second, third] = await strokes();
+			await at(300, 150, { lower: true });
+			// Held and moved across all the ink, hovering: nothing goes.
+			for (const y of [250, 330, 400, 480, 550]) await at(300, y, { lower: true });
+			// The driver's right click for the held button, carrying a hover click's pressure, is not a touch either.
+			await pointer('pointerdown', 300, 400, { pressure: 0.5, buttons: 2, button: 2 });
+			await pointer('pointermove', 300, 550, { pressure: 0.5, buttons: 2, button: -1 });
+			expect(await ids()).toEqual([first.id, second.id, third.id]);
+			// The display says the tip touches the first stroke: that one goes, and only that one, with no pen event from the driver.
+			await at(300, 250, { lower: true, tip: true });
+			await expect.poll(ids).toEqual([second.id, third.id]);
+			await at(300, 250, { lower: true });
+			for (const y of [330, 400]) await at(300, y, { lower: true });
+			expect(await ids()).toEqual([second.id, third.id]);
+			// Touch again and drag across both remaining strokes: they go, as one undo.
+			await at(300, 400, { lower: true, tip: true });
+			await at(300, 480, { lower: true, tip: true });
+			await at(300, 550, { lower: true, tip: true });
+			await expect.poll(async () => (await strokes()).length).toBe(0);
+			await at(300, 550, { lower: true });
+			await at(300, 550);
+			await pointer('pointerup', 300, 550, { pressure: 0, buttons: 0, button: 2 });
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await ids()).toEqual([second.id, third.id]);
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await ids()).toEqual([first.id, second.id, third.id]);
+			// Let go: the pen writes again.
+			await ink(600, 650);
+			expect(await strokes()).toHaveLength(4);
+		});
+
+		test('display pen: the delete button pressed during a stroke ends it and deletes nothing until the tip lifts and touches again', async () => {
+			await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
+			const [first] = await strokes();
+			await pointer('pointerdown', 250, 400);
+			await at(250, 400, { tip: true });
+			await pointer('pointermove', 300, 400, { button: -1 });
+			// The button goes down with the tip on the paper, then the pen is dragged over the first stroke.
+			await at(300, 400, { lower: true, tip: true });
+			await at(300, 250, { lower: true, tip: true });
+			expect((await ids())[0]).toBe(first.id);
+			expect(await strokes()).toHaveLength(2);
+			// Lifted and touched again, still held: now it deletes.
+			await at(300, 250, { lower: true });
+			await at(300, 250, { lower: true, tip: true });
+			await expect.poll(async () => (await ids()).includes(first.id)).toBe(false);
+			await at(300, 250, { lower: true });
+			await at(300, 250);
+		});
+
+		test('display pen: hold the upper button and move scrolls, hovering or touching, and the driver\'s own scrolling adds nothing', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			const start = await origin();
+			await at(750, 500, { upper: true });
+			await at(690, 420, { upper: true });
+			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 80 });
+			// Pan/Scroll on that button turns the same movement into a wheel: it is not a second scroll.
+			await page.locator('#overlay').dispatchEvent('wheel', { deltaX: 0, deltaY: 300 });
+			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 80 });
+			// Touching while it is held keeps dragging the page and never inks.
+			await at(690, 420, { upper: true, tip: true });
+			await at(690, 380, { upper: true, tip: true });
+			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 120 });
+			await at(690, 380, { upper: true });
+			await at(690, 380);
+			expect(await strokes()).toEqual(written);
+			// Let go: moving the pen scrolls nothing, and the pen writes.
+			await at(690, 200);
+			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 120 });
+			await ink(600, 600);
+			expect(await strokes()).toHaveLength(2);
+		});
+
+		test('display pen: a double tap of the upper button redoes even while the driver scrolls for that button', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await strokes()).toEqual([]);
+			const start = await origin();
+			await page.evaluate(async () => {
+				const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+				const overlay = document.querySelector('#overlay');
+				const pen = (x, y, state) => window.scrollmindDebug.nativePen({ range: true, clientX: x, clientY: y, p: 0, ...state });
+				for (let press = 0; press < 2; press++) {
+					pen(500, 400, { upper: true });
+					await wait(120);
+					// The thumb nudges the pen, and the driver turns the nudge into a scroll.
+					overlay.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 6, clientX: 500, clientY: 400 }));
+					pen(504, 403, { upper: true });
+					await wait(80);
+					pen(504, 403, {});
+					await wait(150);
+				}
+			});
+			await expect.poll(strokes).toEqual(written);
+			expect(await origin()).toEqual(start);
+		});
+
+		test('display pen: lower then upper, quickly, arms zoom for the next touch, which the driver draws', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			const before = await zoom();
+			await page.evaluate(async () => {
+				const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+				const pen = state => window.scrollmindDebug.nativePen({ range: true, clientX: 640, clientY: 540, p: 0, ...state });
+				for (const key of ['lower', 'upper']) { pen({ [key]: true }); await wait(90); pen({}); await wait(120); }
+			});
+			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
+			await dragTip(640, 540, 400);
+			expect(await strokes()).toEqual(written);
+			expect(await zoom()).toBeCloseTo(before * 2, 1);
+			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+		});
+
 		test('Escape cancels an armed zoom and the next contact writes', async () => {
 			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 			await armZoom();

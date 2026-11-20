@@ -6,7 +6,7 @@ import { PenInput } from '../src/core/pen-input.mjs';
 import { PenButtonShortcuts } from '../src/core/pen-shortcuts.mjs';
 
 const require = createRequire(import.meta.url);
-const { parseLine, parseAccess, helperPath, createNativePen, RELEASED } = require('../src/main/native-pen.cjs');
+const { parseLine, parsePlace, pagePoint, parseAccess, helperPath, createNativePen, RELEASED } = require('../src/main/native-pen.cjs');
 const { penAccessPrompt } = require('../src/main/pen-access.cjs');
 
 test('helper lines become switch states and nothing else does', () => {
@@ -260,4 +260,105 @@ test('a pen display with macOS holding its reports back gets one plain prompt; e
 	assert.match(penAccessPrompt({ access: 'granted', opened: true }, { manual: true }).message, /buttons are on/);
 	assert.match(penAccessPrompt({ access: null, opened: false }, { manual: true }).message, /No supported pen display/);
 	assert.equal(penAccessPrompt({ access: 'denied', opened: true }, { manual: true }).opensSettings, true);
+});
+
+test('the display\'s place for its pen rides the switch states and its own lines, and only a real place counts', () => {
+	assert.deepEqual(parseLine('{"k":"buttons","tip":true,"lower":true,"upper":false,"range":true,"x":0.5,"y":0.25,"p":0.6}'),
+		{ tip: true, lower: true, upper: false, range: true, x: .5, y: .25, p: .6 });
+	// Out of range the pen is nowhere, whatever the line carries.
+	assert.deepEqual(parseLine('{"k":"buttons","tip":false,"lower":false,"upper":false,"range":false,"x":0.5,"y":0.25,"p":0}'), RELEASED);
+	assert.deepEqual(parseLine('{"k":"buttons","tip":false,"lower":true,"upper":false,"range":true,"x":1.5,"y":0.25}'),
+		{ tip: false, lower: true, upper: false, range: true });
+	assert.deepEqual(parsePlace('{"k":"at","x":0.75,"y":1,"p":0}'), { x: .75, y: 1, p: 0 });
+	for (const line of ['{"k":"at","x":-0.1,"y":0.5}', '{"k":"at","x":"0.5","y":0.5}', '{"k":"buttons","x":0.5,"y":0.5}', 'at', '']) assert.equal(parsePlace(line), null, line);
+});
+
+test('a place on the display becomes a point in the window\'s page, through where the window sits, a turned display and page zoom', () => {
+	const display = { bounds: { x: 0, y: 0, width: 1920, height: 1080 }, rotation: 0 };
+	assert.deepEqual(pagePoint({ x: .5, y: .5 }, display, { x: 0, y: 0, width: 1920, height: 1080 }), { clientX: 960, clientY: 540 });
+	// A window with a title bar, away from the display's corner.
+	assert.deepEqual(pagePoint({ x: .5, y: .5 }, display, { x: 100, y: 78, width: 1200, height: 800 }), { clientX: 860, clientY: 462 });
+	// A second display to the right of the first.
+	assert.deepEqual(pagePoint({ x: 0, y: 1 }, { bounds: { x: 1920, y: 0, width: 1920, height: 1080 }, rotation: 0 }, { x: 2000, y: 100, width: 800, height: 600 }), { clientX: -80, clientY: 980 });
+	assert.deepEqual(pagePoint({ x: .25, y: .5 }, { ...display, rotation: 180 }, { x: 0, y: 0, width: 1920, height: 1080 }), { clientX: 1440, clientY: 540 });
+	assert.deepEqual(pagePoint({ x: .5, y: .5 }, display, { x: 0, y: 0, width: 1920, height: 1080 }, 2), { clientX: 480, clientY: 270 });
+});
+
+test('the reader keeps the switches and adds each new place while one is held', () => {
+	const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stdin: { end() {} }, kill() {} });
+	const states = [];
+	const pen = createNativePen({ file: '/helper', onState: state => states.push(state), start: () => child, setTimer: () => 0, clear: () => {} });
+	pen.start();
+	child.stdout.emit('data', '{"k":"buttons","tip":false,"lower":true,"upper":false,"range":true,"x":0.5,"y":0.5,"p":0}\n{"k":"at","x":0.6,"y":0.5,"p":0}\n');
+	child.stdout.emit('data', '{"k":"buttons","tip":true,"lower":true,"upper":false,"range":true,"x":0.6,"y":0.5,"p":0.4}\n{"k":"at","x":0.7,"y":0.5,"p":0.5}\n');
+	assert.deepEqual(states, [
+		{ tip: false, lower: true, upper: false, range: true, x: .5, y: .5, p: 0 },
+		{ tip: false, lower: true, upper: false, range: true, x: .6, y: .5, p: 0 },
+		{ tip: true, lower: true, upper: false, range: true, x: .6, y: .5, p: .4 },
+		{ tip: true, lower: true, upper: false, range: true, x: .7, y: .5, p: .5 },
+	]);
+	pen.stop();
+});
+
+const placed = (x, y, state = {}) => ({ range: true, clientX: x, clientY: y, p: state.tip ? .6 : 0, ...state });
+
+test('a pen the display places: hold delete is a hover until the display\'s tip touches, and the driver\'s click for it is not used', () => {
+	const input = new PenInput();
+	input.update({ pointerType: 'pen', type: 'pointermove', buttons: 0, button: -1, pressure: 0, pointerId: 9, clientX: 100, clientY: 100 });
+	const [down, hover] = input.native(placed(300, 250, { lower: true }));
+	assert.equal(down.native, true);
+	assert.deepEqual([down.type, down.buttons, down.clientX, down.clientY, down.tipDown], ['pointerdown', 2, 300, 250, false]);
+	assert.deepEqual([hover.placed, hover.type, hover.buttons, hover.tipDown, hover.tipStarted, hover.pressure], [true, 'pointermove', 2, false, false, 0]);
+	assert.equal(input.placing, true);
+	// The driver's right click, with a hover click's pressure: tracked, and the page is told it is not the pen to act on.
+	const click = input.update({ pointerType: 'pen', type: 'pointerdown', buttons: 2, button: 2, pressure: .5, pointerId: 9, clientX: 110, clientY: 100 });
+	assert.equal(input.placing, true);
+	assert.equal(click.pointerType, 'pen');
+	const [touch] = input.native(placed(300, 250, { lower: true, tip: true }));
+	assert.deepEqual([touch.placed, touch.buttons, touch.tipDown, touch.tipStarted, touch.clientX, touch.clientY], [true, 3, true, true, 300, 250]);
+	assert.ok(touch.pressure > 0);
+	const [drag] = input.native(placed(300, 400, { lower: true, tip: true }));
+	assert.deepEqual([drag.buttons, drag.tipDown, drag.tipStarted, drag.clientY], [3, true, false, 400]);
+	const [lift] = input.native(placed(300, 400, { lower: true }));
+	assert.deepEqual([lift.buttons, lift.tipDown, lift.tipStarted, lift.pressure], [2, false, false, 0]);
+	const [again] = input.native(placed(300, 420, { lower: true, tip: true }));
+	assert.equal(again.tipStarted, true);
+});
+
+test('a pen the display places: a switch pressed with the tip down starts nothing, and letting it go mid-touch starts nothing either', () => {
+	const input = new PenInput();
+	const pen = (type, buttons, button, pressure) => input.update({ pointerType: 'pen', type, buttons, button, pressure, pointerId: 9, clientX: 300, clientY: 250 });
+	assert.equal(pen('pointerdown', 1, 0, .5).tipStarted, true);
+	input.native(placed(300, 250, { tip: true }));
+	// The button goes down during the stroke: the display's touch is already under way, so no touch starts.
+	const [down, held] = input.native(placed(300, 250, { lower: true, tip: true }));
+	assert.equal(down.native, true);
+	assert.deepEqual([held.placed, held.tipDown, held.tipStarted], [true, true, false]);
+	assert.equal(input.native(placed(300, 300, { lower: true, tip: true }))[0].tipStarted, false);
+	// It comes up with the tip still down: the page's own events take over, and that same touch does not begin a stroke.
+	const [up] = input.native(placed(300, 300, { tip: true }));
+	assert.deepEqual([up.native, up.type, input.placing], [true, 'pointerup', false]);
+	input.update({ pointerType: 'pen', type: 'pointerup', buttons: 0, button: 0, pressure: 0, pointerId: 9, clientX: 300, clientY: 300 });
+	assert.equal(pen('pointermove', 1, 0, .5).tipStarted, false);
+	// After a real lift the next touch is a new stroke.
+	input.native(placed(300, 300));
+	pen('pointermove', 0, -1, 0);
+	assert.equal(pen('pointerdown', 1, 0, .5).tipStarted, true);
+});
+
+test('a pen the display places: the upper switch carries the pen\'s moves, hovering or touching, and with no place the page keeps contact', () => {
+	const input = new PenInput();
+	const [down, first] = input.native(placed(750, 500, { upper: true }));
+	assert.deepEqual([down.button, down.buttons, first.buttons, first.clientX, first.clientY], [1, 4, 4, 750, 500]);
+	const [second] = input.native(placed(690, 420, { upper: true }));
+	assert.deepEqual([second.placed, second.buttons, second.clientX, second.clientY, second.tipDown], [true, 4, 690, 420, false]);
+	const [touching] = input.native(placed(690, 400, { upper: true, tip: true }));
+	assert.deepEqual([touching.buttons, touching.tipDown, touching.tipStarted], [5, true, true]);
+	const [up] = input.native(placed(690, 400));
+	assert.deepEqual([up.native, up.type, up.buttons & 4, input.placing], [true, 'pointerup', 0, false]);
+	assert.deepEqual(input.native(placed(600, 300)), []);
+	// A display that reports switches and no place: nothing is placed, as before.
+	const plain = new PenInput();
+	assert.deepEqual(plain.native({ lower: true, range: true }).map(event => event.native), [true]);
+	assert.equal(plain.placing, false);
 });

@@ -596,13 +596,19 @@ function traceEvent(raw) {
 function handlePointer(rawEvent) {
   if (!loaded || loadError || fileOperation || rawEvent.pointerType === 'touch') return;
   traceEvent(rawEvent);
-  route(penInput.update(rawEvent));
+  const event = penInput.update(rawEvent);
+  // While the display places its pen (a side switch is held), the driver's version of the pen is kept track of and not acted on.
+  if (penInput.placing && event !== rawEvent) return;
+  route(event);
 }
-// The display's own report of its side switches. The state is always kept; the buttons act only while this window has focus.
+// The display's own report of its pen. The state is always kept; the buttons act only while this window has focus.
+let placedTip = false;
 function handleNativePen(state) {
   for (const event of penInput.native(state)) {
     const routed = (document.hasFocus() || testMode) && loaded && !loadError && !fileOperation;
-    trace(`native ${event.type} ${event.button === 2 ? 'lower' : 'upper'} B=${event.buttons} focus=${document.hasFocus()} routed=${routed}`);
+    if (event.native) trace(`native ${event.type} ${event.button === 2 ? 'lower' : 'upper'} B=${event.buttons} placed=${penInput.placing} @${Math.round(event.clientX)},${Math.round(event.clientY)} focus=${document.hasFocus()} routed=${routed}`);
+    else if (event.tipStarted || event.tipDown !== placedTip) trace(`placed tip=${event.tipDown} B=${event.buttons} @${Math.round(event.clientX)},${Math.round(event.clientY)} routed=${routed}`);
+    if (event.placed) placedTip = event.tipDown;
     if (routed) route(event);
   }
 }
@@ -611,8 +617,11 @@ function route(event) {
   if (lastPointerType !== event.pointerType) { lastPointerType = event.pointerType; updateCursor(); }
   if (penShortcut(event)) { event.preventDefault(); return; }
   if (event.native) {
-    // A switch change reported by the display starts no drag; the driver's own scrolling and the pen's contact do that.
+    // A switch change reported by the display starts no drag: the pen's contact and movement do that.
     if (active?.kind === 'pan' && active.temporary && !(event.buttons & 4)) finishGesture();
+    // Letting go of the delete button ends its erasing; a switch pressed during a stroke ends that stroke where it is.
+    else if (active?.kind === 'barrel-erase' && !(event.buttons & 2)) finishGesture();
+    else if (event.type === 'pointerdown' && penInput.placing && active && active.kind !== 'pan') finishGesture();
     updateCursor();
     return;
   }
@@ -642,6 +651,9 @@ overlay.addEventListener('wheel', event => {
     if (at - lastWheel > 500) { if (wheelBurst) trace(`dom wheel x${wheelBurst}`); wheelBurst = 0; trace(`dom wheel dy=${Math.round(event.deltaY)} dx=${Math.round(event.deltaX)} mode=${event.deltaMode} upperHeld=${penInput.upperHeld} active=${active?.kind ?? 'none'}`); }
     wheelBurst++; lastWheel = at;
   }
+  // While the display places its pen, holding the upper button scrolls by the pen's own movement: the driver's scrolling
+  // for that button is not a second scroll and does not spoil a tap.
+  if (penInput.placing) return;
   // The driver scrolling while the upper button is down is not a tap of it.
   if (penInput.upperHeld) penShortcuts.cancel();
   if (active || fileOperation || !loaded || loadError) return;

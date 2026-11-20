@@ -2,7 +2,8 @@
 
 // The Wacom One 12's side buttons, read from the display itself by the scroll-pen helper (tools/pen/scroll-pen.swift),
 // whatever the Wacom driver assigns them to. Main starts the helper, turns its lines into { tip, lower, upper, range }
-// states, and tells the window. A display that is not there, or a helper that is not built, just means no states.
+// states, with the pen's place on the display ({ x, y, p }) when the display gives it, and tells the window. A display
+// that is not there, or a helper that is not built, just means no states.
 
 const { spawn, execFile } = require('node:child_process');
 const fs = require('node:fs');
@@ -11,12 +12,41 @@ const path = require('node:path');
 const RELEASED = Object.freeze({ tip: false, lower: false, upper: false, range: false });
 const RESTART_MS = 3000;
 
-/** One helper line as a state, or null for anything that is not a buttons line. */
+const unit = (value) => typeof value === 'number' && value >= 0 && value <= 1;
+
+/** Where a helper line says the pen is on the display ({ x, y, p }, each 0...1), or null when it does not say. */
+function placeOf(value) {
+  return unit(value?.x) && unit(value?.y) ? { x: value.x, y: value.y, p: unit(value.p) ? value.p : 0 } : null;
+}
+
+/** One helper line as a state, or null for anything that is not a buttons line. The pen's place comes with it when the display gives one. */
 function parseLine(line) {
   let value;
   try { value = JSON.parse(line); } catch { return null; }
   if (value?.k !== 'buttons') return null;
-  return { tip: value.tip === true, lower: value.lower === true, upper: value.upper === true, range: value.range === true };
+  const state = { tip: value.tip === true, lower: value.lower === true, upper: value.upper === true, range: value.range === true };
+  return state.range ? { ...state, ...placeOf(value) } : state;
+}
+
+/** The pen's place from an "at" line (it moved while a side switch is held), or null for any other line. */
+function parsePlace(line) {
+  let value;
+  try { value = JSON.parse(line); } catch { return null; }
+  return value?.k === 'at' ? placeOf(value) : null;
+}
+
+/**
+ * A place on the display as a point in the window's page. `display`: the pen display's bounds and rotation on the desktop;
+ * `content`: the window's content bounds, same coordinates; `zoom`: the page's zoom factor.
+ */
+function pagePoint({ x, y }, display, content, zoom = 1) {
+  const turns = display.rotation === 90 ? 1 : display.rotation === 180 ? 2 : display.rotation === 270 ? 3 : 0;
+  const [u, v] = turns === 1 ? [1 - y, x] : turns === 2 ? [1 - x, 1 - y] : turns === 3 ? [y, 1 - x] : [x, y];
+  const scale = zoom > 0 ? zoom : 1;
+  return {
+    clientX: (display.bounds.x - content.x + u * display.bounds.width) / scale,
+    clientY: (display.bounds.y - content.y + v * display.bounds.height) / scale,
+  };
 }
 
 /** The Input Monitoring answer in a helper line: 'granted', 'denied' or 'undetermined'; null for any other line. */
@@ -60,6 +90,8 @@ function createNativePen({ file, onState, onAccess = () => {}, log = () => {}, s
         if (answer) { access = answer; log(`input monitoring: ${answer}`); onAccess({ access, opened }); continue; }
         if (line.includes('"k":"opened"')) { opened = true; onAccess({ access, opened }); }
         if (line.includes('"k":"closed"')) { opened = false; onAccess({ access, opened }); }
+        const place = parsePlace(line);
+        if (place) { last = { ...last, ...place }; onState(last); continue; }
         const state = parseLine(line);
         if (state) {
           // The switches are what people ask about when a button seems wrong, so every change of them is on record (pen.log).
@@ -98,4 +130,4 @@ function createNativePen({ file, onState, onAccess = () => {}, log = () => {}, s
   };
 }
 
-module.exports = { parseLine, parseAccess, helperPath, createNativePen, RELEASED };
+module.exports = { parseLine, parsePlace, pagePoint, parseAccess, helperPath, createNativePen, RELEASED };

@@ -26,6 +26,12 @@ export class PenInput {
 	#pressureTip = false;
 	#known = false;
 	#windowsInk;
+	// Where the display says its pen is, as a point in the page ({ x, y, p }); null when it does not say.
+	#place = null;
+	// The display's tip at the last event placed by it.
+	#placedTip = false;
+	// A side switch was let go with the tip still down: that touch starts nothing new.
+	#waitForLift = false;
 
 	constructor({ windowsInk = false } = {}) { this.#windowsInk = windowsInk; }
 
@@ -35,7 +41,15 @@ export class PenInput {
 		this.#mousePointerId = null;
 		this.#tipDown = this.#pressureTip = this.#known = false;
 		this.#hid = { lower: false, upper: false };
+		this.#place = null;
+		this.#placedTip = this.#waitForLift = false;
 	}
+
+	/**
+	 * The display says where its pen is and a side switch is down. The pen's events then come from the display itself
+	 * (native()), and what the driver makes of that switch (a right click, a scroll, nothing the page sees) is not used.
+	 */
+	get placing() { return this.#place !== null && (this.#hid.lower || this.#hid.upper); }
 
 	#hidButtons() { return (this.#hid.lower ? LOWER : 0) | (this.#hid.upper ? UPPER : 0); }
 
@@ -46,33 +60,55 @@ export class PenInput {
 	get hid() { return { ...this.#hid }; }
 
 	/**
-	 * The display's side switches changed. Returns the pen events for each switch that moved (a down or an up, as a click would
-	 * be), carrying the merged buttons at the pen's last position, for the button recognizers to see; none when nothing changed.
-	 * Contact stays with the page's own pen events.
+	 * The display reported its pen. Returns the pen events that follow, for the button recognizers and the tools to see:
+	 *  - one for each side switch that moved (a down or an up, as a click would be), marked `native`;
+	 *  - while a switch is held and the display says where the pen is, one `placed` move carrying the display's own tip and
+	 *    position, so a touch or a drag made with a switch held is the display's and not the driver's version of it.
+	 * With no place from the display, contact stays with the page's own pen events.
 	 */
 	native(state, now = performance.now()) {
+		const wasPlacing = this.placing, wasTip = this.#hidTip;
 		this.#range = state?.range === true;
 		this.#hidTip = state?.tip === true;
 		this.#hidSeen = true;
+		this.#place = this.#range && Number.isFinite(state?.clientX) && Number.isFinite(state?.clientY)
+			? { x: state.clientX, y: state.clientY, p: Number.isFinite(state.p) ? state.p : 0 } : null;
 		const events = [];
 		for (const [key, button] of [['lower', 2], ['upper', 1]]) {
 			const held = state?.[key] === true;
 			if (held === this.#hid[key]) continue;
 			this.#hid[key] = held;
-			const at = this.#sample ?? { x: 0, y: 0 };
+			const at = this.#place ?? this.#sample ?? { x: 0, y: 0 };
+			const tip = this.placing ? this.#hidTip : this.#tipDown;
 			events.push({
 				type: held ? 'pointerdown' : 'pointerup', button, buttons: this.#merged(), pointerId: PEN_POINTER_ID,
 				nativePointerId: this.#nativePointerId ?? PEN_POINTER_ID, pointerType: 'pen', clientX: at.x, clientY: at.y, shiftKey: false,
-				pressure: this.#tipDown ? .5 : 0, tipDown: this.#tipDown, tipStarted: false,
+				pressure: tip ? .5 : 0, tipDown: tip, tipStarted: false,
 				preventDefault: () => {}, getCoalescedEvents: undefined, now,
 				// Marks a change of the display's switches: for the button recognizers and the tool, never the start of a drag.
 				native: true,
 			});
 		}
+		if (this.placing) {
+			// A switch pressed with the tip already down starts nothing until the tip lifts and touches again.
+			const before = wasPlacing ? this.#placedTip : this.#hidTip;
+			this.#placedTip = this.#hidTip;
+			events.push({
+				type: 'pointermove', button: -1, buttons: this.#merged(), pointerId: PEN_POINTER_ID, nativePointerId: PEN_POINTER_ID,
+				pointerType: 'pen', clientX: this.#place.x, clientY: this.#place.y, shiftKey: false,
+				pressure: this.#hidTip ? Math.max(.01, this.#place.p) : 0, tipDown: this.#hidTip, tipStarted: this.#hidTip && !before,
+				preventDefault: () => {}, getCoalescedEvents: undefined, now,
+				placed: true,
+			});
+		} else if (wasPlacing && wasTip && this.#hidTip) this.#waitForLift = true;
+		if (!this.#hidTip) this.#waitForLift = false;
 		return events;
 	}
 
-	#merged() { return ((this.#nativeButtons | this.#mouseButtons | this.#hidButtons()) & ~TIP) | (this.#tipDown ? TIP : 0); }
+	#merged() {
+		if (this.placing) return this.#hidButtons() | (this.#hidTip ? TIP : 0);
+		return ((this.#nativeButtons | this.#mouseButtons | this.#hidButtons()) & ~TIP) | (this.#tipDown ? TIP : 0);
+	}
 
 	/** The display says a pen is over it. */
 	get inRange() { return this.#range; }
@@ -128,7 +164,7 @@ export class PenInput {
 			this.#tipDown = Boolean((this.#nativeButtons | this.#mouseButtons) & TIP) || this.#pressureTip;
 		}
 		const buttons = this.#merged();
-		const tipStarted = this.#tipDown && !previouslyDown && (this.#known || down);
+		const tipStarted = this.#tipDown && !previouslyDown && (this.#known || down) && !this.#waitForLift;
 		this.#known = true;
 		return {
 			type, button, buttons, pointerId: PEN_POINTER_ID, nativePointerId: event.pointerId, pointerType: 'pen',

@@ -7,7 +7,7 @@ const { createDocumentWorkspaces } = require('./documents.cjs');
 const { createDocumentIO } = require('./document-io.cjs');
 const { findScrollArgument, commandForInput } = require('./launch-args.cjs');
 const { updateEligibility, loopbackFeed, macDeveloperId, createUpdater } = require('./updater.cjs');
-const { helperPath, createNativePen } = require('./native-pen.cjs');
+const { helperPath, createNativePen, pagePoint } = require('./native-pen.cjs');
 const { penAccessPrompt } = require('./pen-access.cjs');
 
 app.setName('ScrollMind');
@@ -51,7 +51,14 @@ const logPen = logTo('pen.log');
 // The Wacom One 12's side buttons, read from the display itself so the driver's button assignments cannot hide them.
 let nativePen = null;
 function forwardNativePen(state) {
-  if (window && !window.isDestroyed()) window.webContents.send('pen:native', state);
+  if (!window || window.isDestroyed()) return;
+  // The display says where its pen is in its own panel; the page needs that as a point in this window.
+  let point = null;
+  if (Number.isFinite(state?.x) && Number.isFinite(state?.y)) {
+    const display = screen.getAllDisplays().find((candidate) => /wacom/i.test(candidate.label)) ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    point = pagePoint(state, display, window.getContentBounds(), window.webContents.getZoomFactor());
+  }
+  window.webContents.send('pen:native', point ? { ...state, ...point } : state);
 }
 ipcMain.on('pen:log', (_event, text) => logPen('page', String(text).slice(0, 240)));
 function startNativePen() {
