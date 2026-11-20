@@ -148,7 +148,7 @@ async function main() {
   } else {
     console.log(`Building signed ScrollMind ${pkg.version} (${architecture}).`);
     await command(process.execPath, [path.join(root, 'node_modules', 'electron-builder', 'cli.js'), '--mac', '--dir', `--${architecture}`, '--publish', 'never'], {
-      stream: true, timeout: 15 * 60_000, env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'true' },
+      stream: true, timeout: 45 * 60_000, env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'true' }, // Developer ID signing timestamps every file and can take over 15 minutes.
     });
   }
   await verifySignedApp(team);
