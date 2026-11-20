@@ -41,6 +41,12 @@ test('anything that is not the display\'s button report is refused', { skip: !ma
 	}
 });
 
+test('the helper says whether Input Monitoring is on, without asking', { skip: !mac }, () => {
+	const line = JSON.parse(execFileSync(helper, ['--access']).toString());
+	assert.equal(line.k, 'access');
+	assert.ok(['granted', 'denied', 'undetermined'].includes(line.v));
+});
+
 test('the helper lists the Wacom interfaces without opening anything', { skip: !mac }, () => {
 	for (const line of execFileSync(helper, ['--list']).toString().split('\n').filter(Boolean)) assert.equal(JSON.parse(line).k, 'interface');
 });

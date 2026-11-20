@@ -3,10 +3,12 @@
 // The Wacom driver decides what a side button means before any app sees it: it can turn a button into a click, into
 // Pan/Scroll or into a keystroke, and then the app cannot tell which switch moved. The display itself reports its
 // switches on a vendor HID interface (usage page 0xFFD1, usage 0x300). This opens that interface WITHOUT seizing it, so
-// the driver keeps the pen and the pointer behaves as usual, and it asks for no permission. It reports the physical
-// switches whatever Wacom Center assigns to them.
+// the driver keeps the pen and the pointer behaves as usual. It reports the physical switches whatever Wacom Center
+// assigns to them. macOS opens the interface without complaint but delivers no reports until the app that started this
+// helper has INPUT MONITORING (Privacy & Security); the helper says which it is ("access") and notices the grant.
 //
 // One JSON object per line on stdout:
+//   {"k":"access","v":"granted"|"denied"|"undetermined"}                  Input Monitoring for the app that started this
 //   {"k":"opened","pid":974}                                             the display's vendor interface is open
 //   {"k":"buttons","tip":false,"lower":true,"upper":false,"range":true}  every change of tip, switches or proximity
 //   {"k":"closed","why":"…"}                                             the display went away (it is looked for again)
@@ -17,6 +19,8 @@
 // Without a device, for tests and diagnostics:
 //   scroll-pen --decode "<report bytes, hex>"   the buttons line for one report, or {"k":"not-a-button-report"}
 //   scroll-pen --list                           each Wacom HID interface found
+//   scroll-pen --access                         {"k":"access",…}, nothing else
+//   scroll-pen --request-access                 asks macOS once for Input Monitoring, then says {"k":"access",…}
 //
 // THE REPORT (decoded on the Wacom One 12, 056a:03ce): byte 0 the report id 0x1E, byte 1 0x01 (0x00 is an empty report),
 // byte 2 the STATUS: 0x80 in range, 0x40 valid, 0x01 tip down, 0x02 lower side button, 0x04 upper side button. Seen:
@@ -90,6 +94,22 @@ func buttonInterface() -> IOHIDDevice? {
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 
+func access() -> String {
+    switch IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) {
+    case kIOHIDAccessTypeGranted: return "granted"
+    case kIOHIDAccessTypeDenied: return "denied"
+    default: return "undetermined"
+    }
+}
+func accessLine() -> String { "{\"k\":\"access\",\"v\":\"\(access())\"}" }
+
+if arguments.first == "--access" { say(accessLine()); exit(0) }
+if arguments.first == "--request-access" {
+    if access() != "granted" { _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
+    say(accessLine())
+    exit(0)
+}
+
 if arguments.first == "--decode" {
     guard arguments.count == 2 else { FileHandle.standardError.write(Data("usage: scroll-pen --decode \"<hex bytes>\"\n".utf8)); exit(64) }
     let bytes = arguments[1].split(separator: " ").compactMap { UInt8($0, radix: 16) }
@@ -104,7 +124,7 @@ if arguments.first == "--list" {
     exit(0)
 }
 
-guard arguments.isEmpty else { FileHandle.standardError.write(Data("usage: scroll-pen [--decode \"<hex bytes>\" | --list]\n".utf8)); exit(64) }
+guard arguments.isEmpty else { FileHandle.standardError.write(Data("usage: scroll-pen [--decode \"<hex bytes>\" | --list | --access | --request-access]\n".utf8)); exit(64) }
 
 var side = Side()
 var openDevice: IOHIDDevice?
@@ -161,9 +181,20 @@ stdinClosed.setEventHandler {
 }
 stdinClosed.resume()
 
+var lastAccess = access()
+say(accessLine())
 openInterface()
-// A display plugged in later, or one whose interface was not ready yet, is found within a couple of seconds.
-let watch = Timer(timeInterval: 2, repeats: true) { _ in openInterface() }
+// A display plugged in later, or one whose interface was not ready yet, is found within a couple of seconds. A permission
+// granted while this runs only takes hold on a fresh open of the interface, so the interface is reopened when it arrives.
+let watch = Timer(timeInterval: 2, repeats: true) { _ in
+    let now = access()
+    if now != lastAccess {
+        lastAccess = now
+        say(accessLine())
+        if now == "granted" { closeInterface("Input Monitoring was granted") }
+    }
+    openInterface()
+}
 RunLoop.main.add(watch, forMode: .common)
 CFRunLoopRun()
 exit(0)

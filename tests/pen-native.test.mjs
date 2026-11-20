@@ -6,7 +6,8 @@ import { PenInput } from '../src/core/pen-input.mjs';
 import { PenButtonShortcuts } from '../src/core/pen-shortcuts.mjs';
 
 const require = createRequire(import.meta.url);
-const { parseLine, helperPath, createNativePen, RELEASED } = require('../src/main/native-pen.cjs');
+const { parseLine, parseAccess, helperPath, createNativePen, RELEASED } = require('../src/main/native-pen.cjs');
+const { penAccessPrompt } = require('../src/main/pen-access.cjs');
 
 test('helper lines become switch states and nothing else does', () => {
 	assert.deepEqual(parseLine('{"k":"buttons","tip":false,"lower":true,"upper":false,"range":true}'), { tip: false, lower: true, upper: false, range: true });
@@ -217,4 +218,46 @@ test('the display\'s own tip sensor decides contact when a held barrel button le
 	const plain = new PenInput();
 	plain.update(hover(1, 1), 1);
 	assert.equal(plain.update({ ...hover(2, 2, 2), pressure: .6 }, 2).tipDown, false);
+});
+
+test('Input Monitoring answers are read from helper lines and nothing else counts', () => {
+	for (const value of ['granted', 'denied', 'undetermined']) assert.equal(parseAccess(`{"k":"access","v":"${value}"}`), value);
+	for (const line of ['', 'x', '{"k":"access","v":"maybe"}', '{"k":"opened"}', '{"k":"buttons","v":"granted"}', 'null']) assert.equal(parseAccess(line), null, line);
+});
+
+test('the reader reports Input Monitoring and whether a display is open, and asks macOS through the helper', async () => {
+	const statuses = [], logs = [], processes = [], asked = [];
+	const pen = createNativePen({
+		file: '/helper', onState() {}, onAccess: status => statuses.push(status), log: text => logs.push(text),
+		start: () => { const process = fakeProcess(); processes.push(process); return process; },
+		ask: (file, args, options, done) => { asked.push([file, args]); done(null, '{"k":"access","v":"granted"}\n'); },
+		setTimer: () => 0, clear: () => {},
+	});
+	pen.start();
+	assert.deepEqual(pen.status(), { access: null, opened: false });
+	processes[0].stdout.emit('data', '{"k":"access","v":"denied"}\n{"k":"opened","pid":974}\n');
+	assert.deepEqual(statuses.at(-1), { access: 'denied', opened: true });
+	assert.deepEqual(pen.status(), { access: 'denied', opened: true });
+	assert.ok(logs.includes('input monitoring: denied'));
+	processes[0].stdout.emit('data', '{"k":"access","v":"granted"}\n');
+	assert.equal(pen.status().access, 'granted');
+	processes[0].stdout.emit('data', '{"k":"closed","why":"the display was unplugged"}\n');
+	assert.equal(pen.status().opened, false);
+	assert.equal(await pen.requestAccess(), 'granted');
+	assert.deepEqual(asked, [['/helper', ['--request-access']]]);
+	assert.equal(await createNativePen({ file: null, onState() {} }).requestAccess(), null);
+});
+
+test('a pen display with macOS holding its reports back gets one plain prompt; everything else stays quiet unless asked', () => {
+	const held = penAccessPrompt({ access: 'undetermined', opened: true });
+	assert.equal(held.opensSettings, true);
+	assert.match(held.detail, /Input Monitoring/);
+	assert.deepEqual(held.buttons, ['Open System Settings', 'Not Now']);
+	assert.equal(penAccessPrompt({ access: 'denied', opened: true }).opensSettings, true);
+	assert.equal(penAccessPrompt({ access: 'granted', opened: true }), null);
+	assert.equal(penAccessPrompt({ access: 'denied', opened: false }), null);
+	assert.equal(penAccessPrompt({ access: null, opened: false }), null);
+	assert.match(penAccessPrompt({ access: 'granted', opened: true }, { manual: true }).message, /buttons are on/);
+	assert.match(penAccessPrompt({ access: null, opened: false }, { manual: true }).message, /No supported pen display/);
+	assert.equal(penAccessPrompt({ access: 'denied', opened: true }, { manual: true }).opensSettings, true);
 });

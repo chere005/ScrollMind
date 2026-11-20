@@ -1990,3 +1990,16 @@ test('Fill works with the pen inside a Grid shape, keeps the outline on top, sur
 	await page.keyboard.press(`${modifier}+z`);
 	expect((await snapshot()).strokes.map(stroke => stroke.id)).toEqual([fill.id]);
 });
+
+test('Pen Display Buttons says plainly when there is no supported pen display', async () => {
+	test.skip(process.platform !== 'darwin', 'The app menu is macOS only');
+	await app.evaluate(({ dialog }) => {
+		globalThis.shownDialogs = [];
+		dialog.showMessageBox = async (...args) => { globalThis.shownDialogs.push(args.at(-1)); return { response: 0 }; };
+	});
+	await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items[0].submenu.items.find(item => item.label === 'Pen Display Buttons…').click());
+	await expect.poll(() => app.evaluate(() => globalThis.shownDialogs.length)).toBe(1);
+	const [shown] = await app.evaluate(() => globalThis.shownDialogs);
+	expect(shown.message).toBe('No supported pen display found');
+	expect(shown.buttons).toEqual(['OK']);
+});

@@ -8,6 +8,7 @@ const { createDocumentIO } = require('./document-io.cjs');
 const { findScrollArgument, commandForInput } = require('./launch-args.cjs');
 const { updateEligibility, loopbackFeed, macDeveloperId, createUpdater } = require('./updater.cjs');
 const { helperPath, createNativePen } = require('./native-pen.cjs');
+const { penAccessPrompt } = require('./pen-access.cjs');
 
 app.setName('ScrollMind');
 if (process.platform === 'win32') app.setAppUserModelId('com.seancheren.scrollmind');
@@ -58,8 +59,24 @@ function startNativePen() {
   if (testing) { globalThis.scrollmindNativePen = forwardNativePen; return; }
   const file = helperPath({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, root: path.join(__dirname, '..', '..'), platform: process.platform });
   if (!file) return;
-  nativePen = createNativePen({ file, onState: forwardNativePen, log: (text) => logPen('info', text) });
+  let asked = false;
+  nativePen = createNativePen({
+    file, onState: forwardNativePen, log: (text) => logPen('info', text),
+    // A pen display is there but macOS is holding back its reports: say so once, plainly, and point at the switch.
+    onAccess: (status) => { if (!asked && penAccessPrompt(status)) { asked = true; setTimeout(() => { void showPenAccess(); }, 1500); } },
+  });
   nativePen.start();
+}
+
+async function showPenAccess() {
+  const status = nativePen?.status() ?? { access: null, opened: false };
+  const prompt = penAccessPrompt(status, { manual: true });
+  const options = { type: 'info', message: prompt.message, detail: prompt.detail, buttons: prompt.buttons, defaultId: 0, cancelId: prompt.buttons.length - 1, noLink: true };
+  const { response } = window && !window.isDestroyed() ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  if (prompt.opensSettings && response === 0) {
+    await nativePen?.requestAccess();
+    await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent');
+  }
 }
 
 function startUpdates() {
@@ -129,6 +146,7 @@ function createMenu() {
     ...(process.platform === 'darwin' ? [{ label: 'ScrollMind', submenu: [
       { role: 'about' },
       { label: 'Check for Updates…', click: () => { void checkForUpdates(); } },
+      { label: 'Pen Display Buttons…', click: () => { void showPenAccess(); } },
       { type: 'separator' },
       { role: 'hide' },
       { role: 'hideOthers' },
