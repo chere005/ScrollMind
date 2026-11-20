@@ -545,7 +545,11 @@ for (const type of ['pointerenter', 'pointerdown', 'pointermove', 'pointerup']) 
 function resetShortcuts() {
   penInput.reset(); penShortcuts.reset(); middleClicks.reset(); zoomNextTip = false; lastPointerType = null;
 }
-overlay.addEventListener('pointercancel', () => { resetShortcuts(); finishGesture(true); updateCursor(); });
+overlay.addEventListener('pointercancel', event => {
+  // Only the pointer being dragged can abort its drag. A pen hovering near the display or a resting palm must not snap the work back.
+  if (event.pointerType === 'touch' || (active && event.pointerId !== active.nativePointerId)) return;
+  resetShortcuts(); finishGesture(true); updateCursor();
+});
 overlay.addEventListener('lostpointercapture', event => {
   if (active?.nativePointerId === event.pointerId) finishGesture(true);
 });

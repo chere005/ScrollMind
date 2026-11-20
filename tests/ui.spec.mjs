@@ -1653,3 +1653,32 @@ test('Pen button contract: Windows Hover Click delivers lower then upper as mous
 	expect((await snapshot()).strokes).toEqual(written);
 	expect((await snapshot()).view.scrollZoom).toBeCloseTo(2, 1);
 });
+
+test('a stray cancel from another pointer never snaps a mouse drag of selected ink back', async () => {
+	await draw({ x: 400, y: 300 }, { x: 520, y: 300 });
+	const original = (await snapshot()).strokes[0];
+	await clickPenControl('[data-tool="select"]');
+	await drag({ x: 380, y: 260 }, { x: 540, y: 340 });
+	expect(await selection()).toEqual([original.id]);
+	await page.mouse.move(460, 300);
+	await page.mouse.down();
+	await page.mouse.move(520, 340, { steps: 4 });
+	await page.evaluate(() => {
+		const overlay = document.querySelector('#overlay');
+		overlay.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 44, pointerType: 'pen' }));
+		overlay.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 7, pointerType: 'touch' }));
+	});
+	await page.mouse.move(560, 360, { steps: 4 });
+	await page.mouse.up();
+	const moved = (await snapshot()).strokes[0];
+	expect(moved.points[0].x).toBeCloseTo(original.points[0].x + 100);
+	expect(moved.points[0].y).toBeCloseTo(original.points[0].y + 60);
+
+	// The browser really cancelling the dragged pointer still abandons that drag.
+	await page.mouse.move(560, 360);
+	await page.mouse.down();
+	await page.mouse.move(600, 400, { steps: 3 });
+	await page.evaluate(() => document.querySelector('#overlay').dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1, pointerType: 'mouse' })));
+	await page.mouse.up();
+	expect((await snapshot()).strokes[0].points[0].x).toBeCloseTo(moved.points[0].x);
+});
