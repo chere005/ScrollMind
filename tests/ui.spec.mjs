@@ -1374,9 +1374,9 @@ test('Grid accepts pen ink, mixed Wacom barrel erasing, and mixed barrel clicks 
 	// Lower then upper arms tap-and-drag zoom, not a move: the shape stays where it is.
 	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
 	await pointer('pointerdown', 640, 495);
-	await pointer('pointermove', 640, 530, { button: -1 });
-	await pointer('pointermove', 640, 565, { button: -1 });
-	await pointer('pointerup', 640, 565, { pressure: 0, buttons: 0 });
+	await pointer('pointermove', 640, 460, { button: -1 });
+	await pointer('pointermove', 640, 425, { button: -1 });
+	await pointer('pointerup', 640, 425, { pressure: 0, buttons: 0 });
 	expect((await snapshot()).diagram.nodes[0]).toEqual(shape);
 	expect((await snapshot()).view.gridZoom).toBeGreaterThan(1);
 	expect((await snapshot()).strokes).toEqual(initial);
@@ -1584,12 +1584,12 @@ for (const mode of ['scroll', 'grid']) {
 			const before = { origin: await origin(), zoom: await zoom() };
 			const worldAt = (state, x, y) => ({ x: state.origin.x + x / state.zoom, y: state.origin.y + y / state.zoom });
 			await armZoom();
-			await dragTip(640, 400, 540);
+			await dragTip(640, 540, 400);
 			expect(await strokes()).toEqual(written);
 			const zoomedIn = { origin: await origin(), zoom: await zoom() };
 			expect(zoomedIn.zoom).toBeCloseTo(before.zoom * 2, 1);
-			expect(worldAt(zoomedIn, 640, 400).x).toBeCloseTo(worldAt(before, 640, 400).x, 1);
-			expect(worldAt(zoomedIn, 640, 400).y).toBeCloseTo(worldAt(before, 640, 400).y, 1);
+			expect(worldAt(zoomedIn, 640, 540).x).toBeCloseTo(worldAt(before, 640, 540).x, 1);
+			expect(worldAt(zoomedIn, 640, 540).y).toBeCloseTo(worldAt(before, 640, 540).y, 1);
 			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
 
 			await ink(700, 600);
@@ -1597,7 +1597,7 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await zoom()).toBeCloseTo(zoomedIn.zoom, 5);
 
 			await armZoom();
-			await dragTip(640, 540, 400);
+			await dragTip(640, 400, 540);
 			expect(await zoom()).toBeCloseTo(before.zoom, 1);
 			expect(await strokes()).toHaveLength(2);
 		});
@@ -1647,10 +1647,10 @@ test('Pen button contract: Windows Hover Click delivers lower then upper as mous
 		}
 	});
 	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
-	await pointer('pointerdown', 640, 400);
+	await pointer('pointerdown', 640, 540);
 	await pointer('pointermove', 640, 470, { button: -1 });
-	await pointer('pointermove', 640, 540, { button: -1 });
-	await pointer('pointerup', 640, 540, { pressure: 0, buttons: 0 });
+	await pointer('pointermove', 640, 400, { button: -1 });
+	await pointer('pointerup', 640, 400, { pressure: 0, buttons: 0 });
 	expect((await snapshot()).strokes).toEqual(written);
 	expect((await snapshot()).view.scrollZoom).toBeCloseTo(2, 1);
 });

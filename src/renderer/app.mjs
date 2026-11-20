@@ -32,7 +32,7 @@ if (platform !== 'darwin') {
   }
 }
 let zoomNextTip = false, lastPointerType = null;
-// Zoom by dragging the pen tip: down zooms in, up zooms out; 140 px is a doubling.
+// Zoom by dragging the pen tip: up zooms in, down zooms out, as in NoteMind; 140 px is a doubling.
 const ZOOM_DRAG_RATE = Math.LN2 / 140;
 let scroll = new Scroll();
 let settings = { color: '#171717', width: 3, paper: 'plain', paperTone: 'ivory' };
@@ -531,7 +531,7 @@ function pointerMove(event) {
     active.current = world(event); active.constrain = event.shiftKey;
     active.preview = makeShape(active.shape, active.start, active.current, { color: active.color, width: active.width, penType: active.penType, constrain: active.constrain });
   } else if (active.kind === 'pan') updatePan(event);
-  else if (active.kind === 'zoom') zoomAt(active.startZoom * Math.exp((event.clientY - active.y) * ZOOM_DRAG_RATE), active.x, active.y);
+  else if (active.kind === 'zoom') zoomAt(active.startZoom * Math.exp((active.y - event.clientY) * ZOOM_DRAG_RATE), active.x, active.y);
   else if (active.kind === 'move') { const point = world(event); active.dx = point.x - active.start.x; active.dy = point.y - active.start.y; }
   else if (active.kind === 'resize') {
     const point = world(event), opposite = active.opposite;

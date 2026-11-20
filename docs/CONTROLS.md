@@ -56,7 +56,7 @@ ScrollMind responds to the standard mouse-button actions assigned in the Wacom d
 | Lower | Double-tap while hovering | Undo |
 | Upper | Hold and drag, hovering or touching | Scrolls (Grid mode scrolls in both directions) |
 | Upper | Double-tap while hovering | Redo |
-| Lower, then upper, tapped quickly (within 0.7 seconds) | Then tap and drag the tip | Zooms around the tip: drag down to zoom in, up to zoom out. Lifting the tip returns the pen to normal. |
+| Lower, then upper, tapped quickly (within 0.7 seconds) | Then tap and drag the tip | Zooms around the tip: drag up to zoom in, down to zoom out. Lifting the tip returns the pen to normal. |
 
 A single button click does nothing. Pressing the erase button during an existing stroke does not erase until you lift and touch down again. Each erase drag ends when the tip lifts and undoes together. Erasing and scrolling do not count as double-click commands. The toolbar eraser and a pen's rear eraser also erase continuously on contact.
 
