@@ -10,6 +10,10 @@ Download the arm64 ZIP from the [latest release](https://github.com/chere005/Scr
 
 The app is Developer ID signed and **not notarized**. If macOS blocks the first launch, see [Apple's instructions for opening downloaded apps](https://support.apple.com/en-us/102445).
 
+### Updates
+
+ScrollMind checks the GitHub releases a few seconds after it opens and every 12 hours. It asks before it downloads a newer version, then asks again before restarting; your writing is saved first, and **Later** installs the update the next time you quit. On macOS, **ScrollMind ▸ Check for Updates…** asks at any time. A copy opened from a disk image or from outside Applications does not update itself.
+
 ### Windows
 
 The Windows version requires **Windows 10 or later (x64)**. Run **ScrollMind-Setup-<version>.exe**, the Windows installer published with a release or built locally with `npm run build:win`. It installs for the current user and needs no administrator rights. Open .sm and .smg files in Explorer with ScrollMind.

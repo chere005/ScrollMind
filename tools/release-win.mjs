@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { writeFeed, verifyAppFeed } from './update-feed.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -21,6 +22,7 @@ const installerName = `ScrollMind-Setup-${pkg.version}.exe`;
 const installer = path.join(dist, installerName);
 const unpacked = path.join(dist, 'win-unpacked');
 const report = path.join(dist, `ScrollMind-Setup-${pkg.version}-release.json`);
+const feedFile = path.join(dist, 'latest.yml');
 
 async function command(executable, args, { stream = false, timeout = 60_000, env = process.env } = {}) {
   return new Promise((resolve, reject) => {
@@ -75,7 +77,7 @@ async function main() {
   verifyConfiguration(pkg);
   if (options.has('--check')) { console.log('Windows release configuration verified.'); return; }
   await fs.mkdir(dist, { recursive: true });
-  for (const file of [installer, `${installer}.sha256`, report, `${installer}.blockmap`]) await fs.rm(file, { force: true });
+  for (const file of [installer, `${installer}.sha256`, report, `${installer}.blockmap`, feedFile]) await fs.rm(file, { force: true });
   console.log(`Building unsigned ScrollMind ${pkg.version} (win32 x64).`);
   await command(process.execPath, [path.join(root, 'node_modules', 'electron-builder', 'cli.js'), '--win', '--x64', '--publish', 'never'], { stream: true, timeout: 15 * 60_000 });
   const stat = await fs.stat(installer).catch(() => null);
@@ -89,10 +91,12 @@ async function main() {
   const asar = require('@electron/asar');
   const packaged = JSON.parse(asar.extractFile(path.join(unpacked, 'resources', 'app.asar'), 'package.json').toString('utf8'));
   verifyPackagedVersion(packaged, pkg);
+  verifyAppFeed(await fs.readFile(path.join(unpacked, 'resources', 'app-update.yml'), 'utf8').catch(() => ''), pkg.build.publish.find((entry) => entry.provider === 'github'));
   const handle = await fs.open(installer, 'r+');
   try { await handle.sync(); } finally { await handle.close(); }
   const sha256 = createHash('sha256').update(await fs.readFile(installer)).digest('hex');
   await writeAtomic(`${installer}.sha256`, sha256Line(sha256, installerName));
+  await writeFeed(feedFile, { version: pkg.version, file: installer });
   await writeAtomic(report, `${JSON.stringify({
     version: pkg.version, platform: 'win32', arch: 'x64', status: 'Unsigned',
     installer: path.relative(root, installer).split(path.sep).join('/'), unpacked: 'dist/win-unpacked',

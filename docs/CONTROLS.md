@@ -16,7 +16,7 @@ In Grid mode the left half of the shape button reuses the last picked shape. The
 
 ## Mouse and keyboard
 
-Shortcuts are shown for macOS. On Windows, use Ctrl for ⌘ and Shift for ⇧; the app shows the Windows names. Windows has no menu bar, so every action is in the sidebar or on a shortcut below.
+Shortcuts are shown for macOS. On Windows, use Ctrl for ⌘ and Shift for ⇧; the app shows the Windows names. Windows has no menu bar, so every action is in the sidebar or on a shortcut below. macOS also has **ScrollMind ▸ Check for Updates…**.
 
 The mouse selects and moves by default. Choose Pen or press B to draw with it. The stylus writes by default. Choose Rectangle Selection or press V to use the stylus for selection and movement.
 

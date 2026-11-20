@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const { createDocumentWorkspaces } = require('./documents.cjs');
 const { createDocumentIO } = require('./document-io.cjs');
 const { findScrollArgument, commandForInput } = require('./launch-args.cjs');
+const { updateEligibility, loopbackFeed, macDeveloperId, createUpdater } = require('./updater.cjs');
 
 app.setName('ScrollMind');
 if (process.platform === 'win32') app.setAppUserModelId('com.seancheren.scrollmind');
@@ -27,6 +28,49 @@ let allowClose = false;
 let testClipboard = '';
 let rendererReady = false;
 let pendingClose = false;
+let updates = null;
+let updatesOffReason = 'Updates are not available.';
+let installAfterClose = false;
+
+function logUpdate(level, text) {
+  const file = path.join(app.getPath('logs'), 'update.log');
+  fs.mkdir(path.dirname(file), { recursive: true })
+    .then(async () => {
+      if ((await fs.stat(file).catch(() => null))?.size > 256 * 1024) await fs.rename(file, file.replace(/\.log$/, '.old.log'));
+      await fs.appendFile(file, `${new Date().toISOString()} ${level} ${String(text).slice(0, 500)}\n`);
+    })
+    .catch(() => {});
+}
+
+function startUpdates() {
+  const feed = testing ? loopbackFeed(process.env.SCROLLMIND_UPDATE_FEED) : null;
+  const bundle = path.resolve(path.dirname(process.execPath), '..', '..');
+  const eligible = updateEligibility({
+    platform: process.platform, packaged: app.isPackaged, testing, feedOverride: Boolean(feed),
+    hasFeedFile: app.isPackaged && require('node:fs').existsSync(path.join(process.resourcesPath, 'app-update.yml')),
+    bundle, developerId: process.platform === 'darwin' && app.isPackaged && macDeveloperId(bundle),
+  });
+  if (!eligible.ok) { updatesOffReason = eligible.why; return; }
+  try {
+    const { autoUpdater } = require('electron-updater');
+    if (feed) { autoUpdater.forceDevUpdateConfig = true; autoUpdater.setFeedURL({ provider: 'generic', url: feed }); }
+    updates = createUpdater({
+      autoUpdater, dialog, getWindow: () => window, version: app.getVersion(), log: logUpdate,
+      // The restart goes through the normal close so the final save and store.close() finish before the install.
+      install: () => { installAfterClose = true; requestClose(); },
+    });
+    updates.start();
+  } catch (error) {
+    updatesOffReason = 'The updater could not start.';
+    logUpdate('error', `the updater did not start: ${error?.message ?? error}`);
+  }
+}
+
+async function checkForUpdates() {
+  if (updates) return updates.check({ manual: true });
+  const options = { type: 'info', message: 'Updates are off for this copy', detail: updatesOffReason, buttons: ['OK'], noLink: true };
+  return window && !window.isDestroyed() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+}
 
 function send(command) {
   if (window && !window.isDestroyed()) window.webContents.send('app:command', command);
@@ -64,6 +108,7 @@ function createMenu() {
   const template = [
     ...(process.platform === 'darwin' ? [{ label: 'ScrollMind', submenu: [
       { role: 'about' },
+      { label: 'Check for Updates…', click: () => { void checkForUpdates(); } },
       { type: 'separator' },
       { role: 'hide' },
       { role: 'hideOthers' },
@@ -145,12 +190,20 @@ function installHandlers() {
     if (!closing) return;
     if (result?.error) {
       closing = false;
+      installAfterClose = false;
       if (!testing) await dialog.showMessageBox(window, { type: 'error', title: 'Writing has not been saved', message: 'ScrollMind is staying open to protect your writing.', detail: String(result.error), buttons: ['Keep Writing'] });
       return false;
     }
     await store.flush();
     await store.close();
     allowClose = true;
+    if (installAfterClose && updates) {
+      setImmediate(() => {
+        try { updates.quitAndInstall(); }
+        catch (error) { logUpdate('error', `install failed: ${error?.message ?? error}`); window?.close(); }
+      });
+      return true;
+    }
     window.close();
     return true;
   });
@@ -254,6 +307,7 @@ async function createWindow() {
   });
   installHandlers();
   createMenu();
+  startUpdates();
   await window.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 
@@ -273,7 +327,8 @@ else {
   app.on('before-quit', (event) => { if (window && !allowClose) { event.preventDefault(); requestClose(); } });
   app.whenReady().then(async () => {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-    session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !details.url.startsWith('file:') && !details.url.startsWith('devtools:') && !details.url.startsWith('data:') }));
+    // Pages may load nothing remote. Requests with no page behind them are the main process's own: the updater's feed and download.
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: details.webContentsId != null && !details.url.startsWith('file:') && !details.url.startsWith('devtools:') && !details.url.startsWith('data:') }));
     await createWindow();
   }).catch((error) => { console.error(error); app.exit(1); });
   app.on('window-all-closed', () => app.quit());

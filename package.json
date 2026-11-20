@@ -75,7 +75,17 @@
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "shortcutName": "ScrollMind"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "chere005",
+        "repo": "ScrollMind"
+      }
+    ]
   },
-  "author": "Sean Cheren"
+  "author": "Sean Cheren",
+  "dependencies": {
+    "electron-updater": "6.8.12"
+  }
 }

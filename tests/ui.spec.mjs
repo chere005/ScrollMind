@@ -3,7 +3,9 @@ import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/pro
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
+import { createServer } from 'node:http';
 import { gridPage } from '../src/core/grid.mjs';
+import { feedYaml } from '../tools/update-feed.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -1369,7 +1371,8 @@ test('Grid accepts pen ink, mixed Wacom barrel erasing, and one-shot shape dragg
 
 	const mouse = (type, buttons, button, x, y) => page.evaluate(({ type, buttons, button, x, y }) => {
 		document.querySelector('#overlay').dispatchEvent(new PointerEvent(type, {
-			bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: x, clientY: y, buttons, button,
+			// Not Chromium's own mouse id (1): its synthesized pointerenter would release this held barrel button.
+			bubbles: true, cancelable: true, pointerId: 11, pointerType: 'mouse', isPrimary: true, clientX: x, clientY: y, buttons, button,
 		}));
 	}, { type, buttons, button, x, y });
 	await pointer('pointermove', 510, 400, { pressure: 0, buttons: 0, button: -1 });
@@ -1454,4 +1457,35 @@ test('the pen bar edits and restores named palettes per document', async () => {
 	await page.locator('#palette-reset').click();
 	expect((await snapshot()).settings.palette).toBeUndefined();
 	await expect(page.getByRole('button', { name: 'Blue ink', exact: true })).toHaveAttribute('data-color', '#215b9c');
+});
+
+test('Check for Updates reaches the feed from the main process while pages stay offline', async () => {
+	test.skip(process.platform !== 'darwin', 'The app menu with Check for Updates is macOS only');
+	const requests = [];
+	const feed = feedYaml({ version: '9.9.9', file: 'ScrollMind-9.9.9-arm64-signed.zip', sha512: `${'A'.repeat(86)}==`, size: 1, releaseDate: '2026-11-19T00:00:00.000Z' });
+	const server = createServer((request, response) => { requests.push(request.url); response.setHeader('content-type', 'text/yaml'); response.end(feed); });
+	await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
+	const origin = `http://127.0.0.1:${server.address().port}`;
+	process.env.SCROLLMIND_UPDATE_FEED = origin;
+	try {
+		await closeGracefully();
+		await launch();
+		await app.evaluate(({ dialog }) => {
+			globalThis.shownDialogs = [];
+			dialog.showMessageBox = async (...args) => { globalThis.shownDialogs.push(args.at(-1)); return { response: 1 }; };
+		});
+		await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items[0].submenu.items.find(item => item.label === 'Check for Updates…').click());
+		await expect.poll(() => app.evaluate(() => globalThis.shownDialogs.length)).toBe(1);
+		const [offer] = await app.evaluate(() => globalThis.shownDialogs);
+		expect(offer.message).toBe('ScrollMind 9.9.9 is available');
+		expect(offer.buttons).toEqual(['Download', 'Later']);
+		expect(requests.map(url => url.split('?')[0])).toEqual(['/latest-mac.yml']);
+
+		const pageFetch = await page.evaluate(async address => fetch(`${address}/page-request`).then(() => 'reached', () => 'blocked'), origin);
+		expect(pageFetch).toBe('blocked');
+		expect(requests.some(url => url.startsWith('/page-request'))).toBe(false);
+	} finally {
+		delete process.env.SCROLLMIND_UPDATE_FEED;
+		await new Promise(resolveClose => server.close(resolveClose));
+	}
 });

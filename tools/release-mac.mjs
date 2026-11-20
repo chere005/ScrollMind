@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { writeFeed, verifyAppFeed } from './update-feed.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const options = new Set(process.argv.slice(2));
@@ -19,6 +20,7 @@ const artifactBase = path.join(root, 'dist', `ScrollMind-${pkg.version}-${archit
 const uploadZip = `${artifactBase}-signed.zip`;
 const releaseZip = `${artifactBase}.zip`;
 const stateFile = `${artifactBase}-notarization.json`;
+const feedFile = path.join(root, 'dist', 'latest-mac.yml');
 
 async function command(executable, args, { stream = false, timeout = 60_000, env = process.env } = {}) {
   return new Promise((resolve, reject) => {
@@ -110,6 +112,12 @@ async function verifyNotarizedApp(team) {
   console.log('Stapled notarization ticket and Gatekeeper acceptance verified.');
 }
 
+async function verifyUpdateFeed() {
+  const feed = pkg.build?.publish?.find?.((entry) => entry.provider === 'github');
+  if (!feed) throw new Error('build.publish must name the GitHub release feed.');
+  verifyAppFeed(await fs.readFile(path.join(app, 'Contents', 'Resources', 'app-update.yml'), 'utf8').catch(() => ''), feed);
+}
+
 async function archive(destination) {
   const temporary = `${destination}.${randomUUID()}.tmp`;
   try {
@@ -144,10 +152,12 @@ async function main() {
     });
   }
   await verifySignedApp(team);
+  await verifyUpdateFeed();
   if (!options.has('--resume')) await archive(uploadZip);
   if (signOnly) {
-    await writeState({ version: pkg.version, team, status: 'Signed; not notarized', app, archive: uploadZip, uploadSha256: await sha256(uploadZip) });
-    console.log(`Signed app and archive ready: ${app}; ${uploadZip}`);
+    await writeFeed(feedFile, { version: pkg.version, file: uploadZip });
+    await writeState({ version: pkg.version, team, status: 'Signed; not notarized', app, archive: uploadZip, feed: feedFile, uploadSha256: await sha256(uploadZip) });
+    console.log(`Signed app and archive ready: ${app}; ${uploadZip}; update feed ${feedFile}`);
     return;
   }
   if (!state?.id) {
@@ -176,7 +186,8 @@ async function main() {
   await command('xcrun', ['stapler', 'staple', app], { timeout: 120_000 });
   await verifyNotarizedApp(team);
   await archive(releaseZip);
-  await writeState({ ...state, status: 'Accepted', stapled: true, gatekeeperAccepted: true, archive: releaseZip, sha256: await sha256(releaseZip), verifiedAt: new Date().toISOString() });
+  await writeFeed(feedFile, { version: pkg.version, file: releaseZip });
+  await writeState({ ...state, status: 'Accepted', stapled: true, gatekeeperAccepted: true, archive: releaseZip, feed: feedFile, sha256: await sha256(releaseZip), verifiedAt: new Date().toISOString() });
   console.log(`Signed, notarized, stapled app and ZIP ready: ${app}; ${releaseZip}`);
 }
 
