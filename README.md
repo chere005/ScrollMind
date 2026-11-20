@@ -40,7 +40,7 @@ Scrolls save automatically in `~/Documents/ScrollMind` (`Documents\ScrollMind` o
 
 Scrolls and Grids have separate workspaces. Export an editable Scroll or Grid as a **.sm** file, which ScrollMind recognizes as either, or export either as vector **SVG** or paginated **PDF**. Opening a native file creates a working copy in its workspace.
 
-See the [controls guide](docs/CONTROLS.md) for pen buttons, keyboard shortcuts (Ctrl on Windows), and scroll management, or the [native format reference](docs/SCROLL-FORMAT.md) for storage and recovery details.
+See the [pen buttons](docs/PEN-BUTTONS.md) for exactly what each side button of the pen does, the [controls guide](docs/CONTROLS.md) for keyboard shortcuts (Ctrl on Windows), and scroll management, or the [native format reference](docs/SCROLL-FORMAT.md) for storage and recovery details.
 
 ## Development
 

@@ -1472,10 +1472,11 @@ test('Check for Updates reaches the feed from the main process while pages stay 
 	}
 });
 
-// The pen-button contract (docs/CONTROLS.md, Wacom buttons). It must hold in Scroll and Grid mode; do not weaken these tests.
-//   Lower button: hold and tap or drag to erase; double tap while hovering undoes.
-//   Upper button: hold and drag to scroll; double tap while hovering redoes.
-//   Lower tap then upper tap quickly: the next tap-and-drag zooms, then the pen is normal again.
+// The pen-button contract (docs/PEN-BUTTONS.md). It must never break: it holds in Scroll and Grid mode, and these tests must
+// not be weakened or removed (tests/pen-contract-doc.test.mjs checks they are here). Change it only on Sean's explicit word.
+//   Lower held, tip taps or drags: delete. Lower double-tap: undo.
+//   Upper held, tip drags: scroll. Upper double-tap: redo.
+//   Lower tapped, then upper held, tip drags: zoom (up in, down out), until the upper button is let go.
 for (const mode of ['scroll', 'grid']) {
 	test.describe(`Pen button contract: ${mode}`, () => {
 		test.beforeEach(async () => {

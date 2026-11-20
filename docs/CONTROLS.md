@@ -48,20 +48,17 @@ A selection rectangle selects complete strokes that it crosses. Each drawing, er
 
 ScrollMind responds to the standard mouse-button actions assigned in the Wacom driver: on a tablet or pen display it does not read natively, assign the lower switch to **Right Click** and the upper switch to **Middle Click**. On a **Wacom One 12** on a Mac, ScrollMind reads the pen from the display itself (the same pen report the Wacom driver reads), so every row below works whatever Wacom Center assigns to the switches: while a side switch is held, where the pen is and whether its tip touches come from the display, and what the driver makes of that switch (**Right Click**, **Pan/Scroll**, or nothing) is set aside. macOS delivers the display's button reports only to an app with **Input Monitoring**, so ScrollMind asks once when it finds the display; turn on ScrollMind under System Settings ▸ Privacy & Security ▸ Input Monitoring and reopen it. **ScrollMind ▸ Pen Display Buttons…** shows whether it is on and opens that setting. Reading the buttons does not stop the driver from using the pen.
 
-**This is the pen-button contract.** It is the same in Scroll and Grid mode, and every release runs the tests that check each line (the *Pen button contract* tests in `tests/ui.spec.mjs`, plus `tests/pen-shortcuts.test.mjs` and `tests/pen-input.test.mjs`; `npm run test:pen` runs them alone, with the checks of the display's own button reports). Change this behavior only on purpose, and change this page and those tests with it.
+**The pen buttons are a fixed contract: [PEN-BUTTONS.md](PEN-BUTTONS.md) says exactly what each button does, and the tests that keep it from ever breaking.** In short, the same in Scroll and Grid mode:
 
-| Pen button | Gesture | Result |
-| --- | --- | --- |
-| Lower | Hold, then tap or drag the tip | Erases only where the tip touches: holding alone deletes nothing, and every tap or drag deletes until the button is let go. Each erase drag is one undo. |
-| Lower | Double-tap while hovering | Undo |
-| Upper | Hold, then touch and drag the tip | Scrolls (Grid mode scrolls in both directions). Holding alone, or moving the pen while it hovers, scrolls nothing (on the Wacom One 12; a driver's Hover Click on Windows scrolls while hovering). |
-| Upper | Double-tap while hovering | Redo |
-| Upper | Held | Scroll mode until it is let go: every tap and drag of the tip scrolls, lifting the tip between drags. |
-| Lower tapped, then upper pressed quickly (within 0.7 seconds) and held | Tap and drag the tip | Zoom mode until the upper button is let go: every tap and drag zooms around the tip, drag up to zoom in, down to zoom out. Letting go of the upper button returns the pen to normal. |
+| Do this | It does this |
+| --- | --- |
+| Lower held, tip taps or drags | Delete what the tip touches |
+| Lower double-tap | Undo |
+| Upper held, tip drags | Scroll |
+| Upper double-tap | Redo |
+| Lower tapped, then upper held, tip drags | Zoom: drag up to zoom in, down to zoom out |
 
-A tap of a button is a press of at most half a second in which the pen stays put, within a few millimeters; a longer press is a hold. A single button click does nothing. Pressing the erase button during an existing stroke does not erase until you lift and touch down again. Each erase drag ends when the tip lifts and undoes together. Erasing and scrolling do not count as double-click commands. The toolbar eraser and a pen's rear eraser also erase continuously on contact.
-
-The zoom chord must be lower first, then upper, with the tip hovering; upper then lower, or a long pause between them, does nothing, and the upper press of a zoom chord is not a tap. Escape ends zoom mode. A tap the display itself reports counts however far the pen drifts under the thumb. The sidebar zoom buttons, a trackpad pinch, and Ctrl + wheel also zoom. To move ink with the pen, choose Select in the pen bar.
+Holding a button alone does nothing, and a held button is a mode until it is let go. The sidebar zoom buttons, a trackpad pinch, and Ctrl + wheel also zoom. To move ink with the pen, choose Select in the pen bar.
 
 Useful ExpressKey assignments are ⌘Z, ⌘⇧Z, B, E, V, H, and Tab (Ctrl+Z and Ctrl+Y on Windows). A ring or strip assigned to vertical scrolling moves along the page. ScrollMind does not change the driver's assignments.
 
