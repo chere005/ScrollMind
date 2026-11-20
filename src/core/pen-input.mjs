@@ -16,6 +16,8 @@ export class PenInput {
 	#sample = null;
 	#hid = { lower: false, upper: false };
 	#range = false;
+	#hidTip = false;
+	#hidSeen = false;
 	#nativePointerId = null;
 	#nativeButtons = 0;
 	#mouseButtons = 0;
@@ -50,6 +52,8 @@ export class PenInput {
 	 */
 	native(state, now = performance.now()) {
 		this.#range = state?.range === true;
+		this.#hidTip = state?.tip === true;
+		this.#hidSeen = true;
 		const events = [];
 		for (const [key, button] of [['lower', 2], ['upper', 1]]) {
 			const held = state?.[key] === true;
@@ -106,7 +110,10 @@ export class PenInput {
 			const barrelContact = down && button === 2 && Boolean(event.buttons & LOWER) && !(event.buttons & REAR)
 				&& (this.#windowsInk || event.pressure !== .5);
 			this.#pressureTip = !tipBit && !up && event.pressure > 0 && (tipEdge || barrelContact || this.#pressureTip);
-			this.#tipDown = (tipBit || tipEdge || this.#pressureTip || Boolean(this.#mouseButtons & TIP)) && !(up && button === 0);
+			// With a barrel button held the driver may report the tip's touch with no tip bit at all, and a hover click can carry a
+			// default pressure; the display's own tip sensor settles both: pressure the page sees while the display says the tip is down.
+			const displayContact = this.#hidSeen && this.#hidTip && event.pressure > 0 && !up;
+			this.#tipDown = (tipBit || tipEdge || this.#pressureTip || displayContact || Boolean(this.#mouseButtons & TIP)) && !(up && button === 0);
 		} else {
 			const tracked = this.#mousePointerId === event.pointerId;
 			const bit = buttonBit(button);

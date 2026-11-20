@@ -187,3 +187,34 @@ test('a pen the display reports in range owns the mouse-class events at its posi
 	fresh.native({ range: true }, 5);
 	assert.equal(fresh.isNear(click(1, 1), 10), true, 'in range, the page has not seen the pen move yet');
 });
+
+test('the display\'s own tip sensor decides contact when a held barrel button leaves the page no tip bit', () => {
+	const input = new PenInput();
+	input.update(hover(400, 300), 10);
+	input.native({ lower: true, range: true }, 20);
+	// Hold alone: the pen hovers, moving across ink, and nothing is in contact.
+	const hovering = input.update(hover(420, 300, 2), 30);
+	assert.equal(hovering.tipDown, false);
+	assert.equal(hovering.tipStarted, false);
+	// Pressure the page sees while the display says the tip is up (a default hover pressure) is not contact.
+	assert.equal(input.update({ ...hover(430, 300, 2), pressure: .5 }, 40).tipDown, false);
+	// The tip touches: the display says so and the page sees pressure, with no tip bit and no button change.
+	input.native({ lower: true, tip: true, range: true }, 50);
+	const touch = input.update({ ...hover(440, 300, 2), pressure: .6 }, 60);
+	assert.equal(touch.tipDown, true);
+	assert.equal(touch.tipStarted, true);
+	assert.equal(touch.buttons, 3);
+	// Dragging with the tip down stays in contact without starting again.
+	const drag = input.update({ ...hover(460, 300, 2), pressure: .7 }, 70);
+	assert.equal(drag.tipDown, true);
+	assert.equal(drag.tipStarted, false);
+	// Lifting: the pressure falls and contact ends while the button stays held; the next touch starts again.
+	input.native({ lower: true, range: true }, 80);
+	assert.equal(input.update(hover(460, 300, 2), 90).tipDown, false);
+	input.native({ lower: true, tip: true, range: true }, 100);
+	assert.equal(input.update({ ...hover(470, 300, 2), pressure: .6 }, 110).tipStarted, true);
+	// With no display reports at all, the page's own rules stand: pressure without a tip bit or a touch edge is not contact.
+	const plain = new PenInput();
+	plain.update(hover(1, 1), 1);
+	assert.equal(plain.update({ ...hover(2, 2, 2), pressure: .6 }, 2).tipDown, false);
+});

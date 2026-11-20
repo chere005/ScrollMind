@@ -1676,6 +1676,44 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await strokes()).toHaveLength(2);
 		});
 
+		test('display buttons: hold delete deletes nothing until the tip touches, then every tap or drag deletes while it stays held', async () => {
+			await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
+			await draw({ x: 200, y: 400 }, { x: 400, y: 400 });
+			await draw({ x: 200, y: 550 }, { x: 400, y: 550 });
+			const [first, second, third] = await strokes();
+			const touch = (x, y, p = 0.6) => pointer('pointermove', x, y, { pressure: p, buttons: 0, button: -1 });
+			const hoverTo = (x, y) => pointer('pointermove', x, y, { pressure: 0, buttons: 0, button: -1 });
+			await hoverTo(300, 150);
+			await native({ lower: true, range: true });
+			// Holding the button and moving the pen across all the ink deletes nothing.
+			for (const y of [250, 330, 400, 480, 550]) await hoverTo(300, y);
+			expect((await strokes()).map(stroke => stroke.id)).toEqual([first.id, second.id, third.id]);
+			// The tip touches (the driver gives the page pressure but no tip bit): that tap deletes what is under it, and only that.
+			await hoverTo(300, 250);
+			await native({ lower: true, tip: true, range: true });
+			await touch(300, 250);
+			await expect.poll(async () => (await strokes()).map(stroke => stroke.id)).toEqual([second.id, third.id]);
+			await native({ lower: true, range: true });
+			await hoverTo(300, 250);
+			// Lifted, still holding: moving over the rest deletes nothing.
+			for (const y of [330, 400]) await hoverTo(300, y);
+			expect((await strokes()).map(stroke => stroke.id)).toEqual([second.id, third.id]);
+			// Touch again and drag across both remaining strokes: they go, as one undo.
+			await native({ lower: true, tip: true, range: true });
+			await touch(300, 400);
+			await touch(300, 480);
+			await touch(300, 550);
+			await expect.poll(async () => (await strokes()).length).toBe(0);
+			await native({ lower: true, range: true });
+			await hoverTo(300, 550);
+			await native({ range: true });
+			await page.keyboard.press(`${modifier}+z`);
+			expect((await strokes()).map(stroke => stroke.id)).toEqual([second.id, third.id]);
+			// Released: touching deletes nothing and writes.
+			await page.keyboard.press(`${modifier}+z`);
+			expect((await strokes()).map(stroke => stroke.id)).toEqual([first.id, second.id, third.id]);
+		});
+
 		test('display buttons: a slow double press that nudges the pen under the thumb still counts as a double tap', async () => {
 			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 			const written = await strokes();
