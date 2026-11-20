@@ -1,3 +1,5 @@
+// The actions: 'undo' (lower double tap), 'redo' (upper double tap), and with navigation 'zoom-hold' (lower tapped, then upper
+// pressed quickly: zoom mode, for as long as the upper button stays down) and 'zoom-end' (that upper button let go).
 const DELETE_BUTTON = 2;
 const SCROLL_BUTTON = 4;
 const CONTACT_BUTTONS = 1 | 32;
@@ -13,6 +15,8 @@ export const PEN_CLICK_MOVEMENT = 8;
 export class PenButtonShortcuts {
   #pointers = new Map();
   #candidate = null;
+  // The zoom chord's upper press, while it lasts: { pointerId }.
+  #zoom = null;
   #pressureContact;
   #navigation;
 
@@ -25,7 +29,11 @@ export class PenButtonShortcuts {
   reset() {
     this.#pointers.clear();
     this.#candidate = null;
+    this.#zoom = null;
   }
+
+  /** The zoom chord is on: its upper button is still down. */
+  get zooming() { return this.#zoom !== null; }
 
   /** Something other than a click happened while a button was down (the driver scrolling, say): that press is not a tap. */
   cancel() {
@@ -69,6 +77,15 @@ export class PenButtonShortcuts {
     }
     const buttons = event.buttons;
     const previous = state.buttons;
+    // The zoom chord lasts while its upper button is down, the tip touching or not; letting it go ends the chord, and it is no tap.
+    if (this.#zoom) {
+      state.buttons = buttons;
+      state.lastTime = now;
+      if (this.#zoom.pointerId !== pointerId || (buttons & SCROLL_BUTTON)) return null;
+      this.#zoom = null;
+      state.press = null;
+      return 'zoom-end';
+    }
     const x = Number.isFinite(event.clientX) ? event.clientX : 0;
     const y = Number.isFinite(event.clientY) ? event.clientY : 0;
     const cleanButton = buttons === DELETE_BUTTON || buttons === SCROLL_BUTTON ? buttons : 0;
@@ -81,8 +98,10 @@ export class PenButtonShortcuts {
     let action = null;
     if (state.press) {
       const press = state.press;
-      if (pressed || (buttons & ~press.button) || Math.hypot(x - press.x, y - press.y) > TAP_MOVEMENT
-        || now - press.time > MAX_CLICK_DURATION) {
+      // (where the display itself reports the pen, a press in the air does nothing else, so how far the pen drifts under the thumb
+      // does not matter: only how long the press lasts)
+      const drifted = !event.native && !event.placed && Math.hypot(x - press.x, y - press.y) > TAP_MOVEMENT;
+      if (pressed || (buttons & ~press.button) || drifted || now - press.time > MAX_CLICK_DURATION) {
         press.valid = false;
         this.#candidate = null;
       }
@@ -91,9 +110,8 @@ export class PenButtonShortcuts {
         if (press.valid && buttons === 0) {
           const prior = this.#candidate?.pointerId === pointerId ? this.#candidate.button : null;
           const doubleClick = prior === press.button && press.time - this.#candidate.time <= PEN_CLICK_WINDOW;
-          const zoomSequence = this.#navigation && prior === DELETE_BUTTON && press.button === SCROLL_BUTTON;
-          if (doubleClick || zoomSequence) {
-            action = zoomSequence ? 'zoom-next' : press.button === DELETE_BUTTON ? 'undo' : 'redo';
+          if (doubleClick) {
+            action = press.button === DELETE_BUTTON ? 'undo' : 'redo';
             this.#candidate = null;
           } else {
             this.#candidate = { pointerId, button: press.button, time: now };
@@ -102,8 +120,14 @@ export class PenButtonShortcuts {
       }
     }
     if (cleanButton && !(previous & cleanButton) && !state.press) {
-      if (this.#candidate && (this.#candidate.pointerId !== pointerId || this.#candidate.button !== cleanButton
-        && !(this.#navigation && this.#candidate.button === DELETE_BUTTON && cleanButton === SCROLL_BUTTON))) this.#candidate = null;
+      // The lower button tapped, then the upper one pressed in time: zoom mode from this press until it is let go.
+      if (this.#navigation && cleanButton === SCROLL_BUTTON && !pressed && this.#candidate?.pointerId === pointerId
+        && this.#candidate.button === DELETE_BUTTON && now - this.#candidate.time <= ZOOM_SEQUENCE_WINDOW) {
+        this.#candidate = null;
+        this.#zoom = { pointerId };
+        return 'zoom-hold';
+      }
+      if (this.#candidate && (this.#candidate.pointerId !== pointerId || this.#candidate.button !== cleanButton)) this.#candidate = null;
       state.press = { button: cleanButton, time: now, x, y, valid: !pressed };
     }
     return action;

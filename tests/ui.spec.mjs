@@ -1370,13 +1370,13 @@ test('Grid accepts pen ink, mixed Wacom barrel erasing, and mixed barrel clicks 
 	await mouse('pointerdown', 2, 2, 640, 495);
 	await mouse('pointerup', 0, 2, 640, 495);
 	await pointer('pointerdown', 640, 495, { pressure: 0, buttons: 4, button: 1 });
-	await pointer('pointerup', 640, 495, { pressure: 0, buttons: 0, button: 1 });
-	// Lower then upper arms tap-and-drag zoom, not a move: the shape stays where it is.
+	// Lower tapped, then upper held: tap and drag zooms, not a move: the shape stays where it is.
 	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
-	await pointer('pointerdown', 640, 495);
-	await pointer('pointermove', 640, 460, { button: -1 });
-	await pointer('pointermove', 640, 425, { button: -1 });
-	await pointer('pointerup', 640, 425, { pressure: 0, buttons: 0 });
+	await pointer('pointermove', 640, 495, { buttons: 5, button: 0 });
+	await pointer('pointermove', 640, 460, { buttons: 5, button: -1 });
+	await pointer('pointermove', 640, 425, { buttons: 5, button: -1 });
+	await pointer('pointermove', 640, 425, { pressure: 0, buttons: 4, button: 0 });
+	await pointer('pointerup', 640, 425, { pressure: 0, buttons: 0, button: 1 });
 	expect((await snapshot()).diagram.nodes[0]).toEqual(shape);
 	expect((await snapshot()).view.gridZoom).toBeGreaterThan(1);
 	expect((await snapshot()).strokes).toEqual(initial);
@@ -1506,7 +1506,16 @@ for (const mode of ['scroll', 'grid']) {
 			await pointer('pointermove', x + 60, y + 20, { button: -1 });
 			await pointer('pointerup', x + 60, y + 20, { pressure: 0, buttons: 0 });
 		};
-		const armZoom = async () => { await lowerClick(); await upperClick(); await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in'); };
+		// The zoom chord: the lower button tapped, then the upper one pressed and held. Zoom mode lasts until it is let go.
+		const armZoom = async () => { await lowerClick(); await pointer('pointerdown', 750, 400, { pressure: 0, buttons: 4, button: 1 }); await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in'); };
+		const releaseUpper = () => pointer('pointerup', 750, 400, { pressure: 0, buttons: 0, button: 1 });
+		// A tap and drag of the tip with the upper button still held.
+		const dragHeld = async (x, y, toY) => {
+			await pointer('pointermove', x, y, { buttons: 5, button: 0 });
+			await pointer('pointermove', x, (y + toY) / 2, { buttons: 5, button: -1 });
+			await pointer('pointermove', x, toY, { buttons: 5, button: -1 });
+			await pointer('pointermove', x, toY, { pressure: 0, buttons: 4, button: 0 });
+		};
 		const dragTip = async (x, y, toY) => {
 			await pointer('pointerdown', x, y);
 			await pointer('pointermove', x, (y + toY) / 2, { button: -1 });
@@ -1578,28 +1587,32 @@ for (const mode of ['scroll', 'grid']) {
 			await expect.poll(strokes).toEqual(written);
 		});
 
-		test('lower then upper tapped quickly arms tap-and-drag zoom for the next contact only', async () => {
+		test('lower tapped, then upper held: every tap and drag zooms until the upper button is let go', async () => {
 			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 			const written = await strokes();
 			const before = { origin: await origin(), zoom: await zoom() };
 			const worldAt = (state, x, y) => ({ x: state.origin.x + x / state.zoom, y: state.origin.y + y / state.zoom });
 			await armZoom();
-			await dragTip(640, 540, 400);
+			await dragHeld(640, 540, 400);
 			expect(await strokes()).toEqual(written);
 			const zoomedIn = { origin: await origin(), zoom: await zoom() };
 			expect(zoomedIn.zoom).toBeCloseTo(before.zoom * 2, 1);
 			expect(worldAt(zoomedIn, 640, 540).x).toBeCloseTo(worldAt(before, 640, 540).x, 1);
 			expect(worldAt(zoomedIn, 640, 540).y).toBeCloseTo(worldAt(before, 640, 540).y, 1);
+			// Lifted, still held: still zoom mode. The next drag, down, zooms out.
+			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
+			await dragHeld(640, 400, 540);
+			expect(await zoom()).toBeCloseTo(before.zoom, 1);
+			expect(await strokes()).toEqual(written);
+			await dragHeld(640, 540, 400);
+			expect(await zoom()).toBeCloseTo(before.zoom * 2, 1);
+			// Let go: the pen is normal again.
+			await releaseUpper();
 			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
-
+			const zoomed = await zoom();
 			await ink(700, 600);
 			expect(await strokes()).toHaveLength(2);
-			expect(await zoom()).toBeCloseTo(zoomedIn.zoom, 5);
-
-			await armZoom();
-			await dragTip(640, 400, 540);
-			expect(await zoom()).toBeCloseTo(before.zoom, 1);
-			expect(await strokes()).toHaveLength(2);
+			expect(await zoom()).toBeCloseTo(zoomed, 5);
 		});
 
 		// The Wacom One 12 reports its side switches itself, so these work however the driver assigns them (the upper one is often
@@ -1611,7 +1624,7 @@ for (const mode of ['scroll', 'grid']) {
 			await new Promise(resolve => setTimeout(resolve, 60));
 			window.scrollmindDebug.nativePen({ range: true });
 		}, key);
-		const armNativeZoom = async () => { await nativeClick('lower'); await nativeClick('upper'); await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in'); };
+		const armNativeZoom = async () => { await nativeClick('lower'); await native({ upper: true, range: true }); await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in'); };
 
 		test('display buttons: reports from the display reach the page through the main process', async () => {
 			await app.evaluate((_electron, value) => globalThis.scrollmindNativePen(value), { upper: true, range: true });
@@ -1663,14 +1676,22 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await strokes()).toHaveLength(1);
 		});
 
-		test('display buttons: lower then upper, quickly, arms zoom for the next contact, and up zooms in', async () => {
+		test('display buttons: lower tapped, then upper held, zooms on every tap and drag until the upper switch lets go', async () => {
 			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 			const written = await strokes();
 			const before = await zoom();
 			await armNativeZoom();
-			await dragTip(640, 540, 400);
+			const touchDrag = async (y, toY) => {
+				await native({ upper: true, tip: true, range: true });
+				await dragTip(640, y, toY);
+				await native({ upper: true, range: true });
+			};
+			await touchDrag(540, 400);
 			expect(await strokes()).toEqual(written);
 			expect(await zoom()).toBeCloseTo(before * 2, 1);
+			await touchDrag(400, 540);
+			expect(await zoom()).toBeCloseTo(before, 1);
+			await native({ range: true });
 			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
 			await ink(700, 600);
 			expect(await strokes()).toHaveLength(2);
@@ -1943,20 +1964,32 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await origin()).toEqual(start);
 		});
 
-		test('display pen: lower then upper, quickly, arms zoom for the next touch, which the driver draws', async () => {
+		test('display pen: lower tapped, then upper held, is zoom mode for every touch until the upper button lets go', async () => {
 			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 			const written = await strokes();
 			const before = await zoom();
 			await page.evaluate(async () => {
 				const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 				const pen = state => window.scrollmindDebug.nativePen({ range: true, clientX: 640, clientY: 540, p: 0, ...state });
-				for (const key of ['lower', 'upper']) { pen({ [key]: true }); await wait(90); pen({}); await wait(120); }
+				pen({ lower: true }); await wait(90); pen({}); await wait(120); pen({ upper: true });
 			});
-			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
-			await dragTip(640, 540, 400);
+			const drag = async (y, toY) => {
+				for (const at of [y, (y + toY) / 2, toY]) await native({ range: true, upper: true, tip: true, clientX: 640, clientY: at, p: 0.6 });
+				await native({ range: true, upper: true, clientX: 640, clientY: toY, p: 0 });
+			};
+			await drag(540, 400);
 			expect(await strokes()).toEqual(written);
 			expect(await zoom()).toBeCloseTo(before * 2, 1);
+			// Hovering while still held neither zooms nor scrolls; the next touch zooms again.
+			const view = await snapshot();
+			await native({ range: true, upper: true, clientX: 300, clientY: 200, p: 0 });
+			expect((await snapshot()).view).toEqual(view.view);
+			await drag(400, 540);
+			expect(await zoom()).toBeCloseTo(before, 1);
+			await native({ range: true, clientX: 640, clientY: 540, p: 0 });
 			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+			await ink(700, 600);
+			expect(await strokes()).toHaveLength(2);
 		});
 
 		test('Escape cancels an armed zoom and the next contact writes', async () => {
@@ -1964,6 +1997,7 @@ for (const mode of ['scroll', 'grid']) {
 			await armZoom();
 			await page.keyboard.press('Escape');
 			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+			await releaseUpper();
 			await ink(600, 500);
 			expect(await strokes()).toHaveLength(2);
 			expect(await zoom()).toBe(1);
@@ -1989,7 +2023,7 @@ for (const mode of ['scroll', 'grid']) {
 	});
 }
 
-test('Pen button contract: Windows Hover Click delivers lower then upper as mouse input and still arms zoom', async () => {
+test('Pen button contract: Windows Hover Click delivers lower then a held upper as mouse input and still zooms', async () => {
 	await relaunchWithPenPlatform('win32');
 	await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 	const written = (await snapshot()).strokes;
@@ -1997,11 +2031,10 @@ test('Pen button contract: Windows Hover Click delivers lower then upper as mous
 		const overlay = document.querySelector('#overlay');
 		const fire = (type, init) => overlay.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: 600, clientY: 400, ...init }));
 		fire('pointermove', { pointerId: 44, pointerType: 'pen', buttons: 0, pressure: 0 });
-		for (const [button, buttons] of [[2, 2], [1, 4]]) {
-			fire('pointerdown', { pointerId: 11, pointerType: 'mouse', button, buttons });
-			fire('pointerup', { pointerId: 11, pointerType: 'mouse', button, buttons: 0 });
-			await new Promise(resolve => setTimeout(resolve, 80));
-		}
+		fire('pointerdown', { pointerId: 11, pointerType: 'mouse', button: 2, buttons: 2 });
+		fire('pointerup', { pointerId: 11, pointerType: 'mouse', button: 2, buttons: 0 });
+		await new Promise(resolve => setTimeout(resolve, 80));
+		fire('pointerdown', { pointerId: 11, pointerType: 'mouse', button: 1, buttons: 4 });
 	});
 	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in');
 	await pointer('pointerdown', 640, 540);
@@ -2010,6 +2043,8 @@ test('Pen button contract: Windows Hover Click delivers lower then upper as mous
 	await pointer('pointerup', 640, 400, { pressure: 0, buttons: 0 });
 	expect((await snapshot()).strokes).toEqual(written);
 	expect((await snapshot()).view.scrollZoom).toBeCloseTo(2, 1);
+	await page.evaluate(() => document.querySelector('#overlay').dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: 600, clientY: 400, pointerId: 11, pointerType: 'mouse', button: 1, buttons: 0 })));
+	await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
 });
 
 test('a stray cancel from another pointer never snaps a mouse drag of selected ink back', async () => {

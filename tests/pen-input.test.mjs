@@ -23,7 +23,7 @@ test('mixed mouse barrel and native pen contact form one erase stream, including
 	assert.equal(input.update(event('mouse', 'pointerup', 0, 2)).buttons, 0);
 });
 
-test('lower and upper clicks from different renderer streams can arm the same zoom drag', () => {
+test('a lower click and an upper press from different renderer streams make the same zoom chord', () => {
 	const input = new PenInput();
 	const shortcuts = new PenButtonShortcuts({ navigation: true });
 	const inputs = [
@@ -32,7 +32,7 @@ test('lower and upper clicks from different renderer streams can arm the same zo
 		event('mouse', 'pointerdown', 4, 1, .5),
 		event('mouse', 'pointerup', 0, 1),
 	];
-	assert.deepEqual(inputs.map((sample, i) => shortcuts.update(input.update(sample, 50 * i), 50 * i)), [null, null, null, 'zoom-next']);
+	assert.deepEqual(inputs.map((sample, i) => shortcuts.update(input.update(sample, 50 * i), 50 * i)), [null, null, 'zoom-hold', 'zoom-end']);
 });
 
 test('ordinary mouse input stays mouse when it is away from the pen', () => {

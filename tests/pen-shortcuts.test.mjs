@@ -178,23 +178,52 @@ test('default constructor still treats pressured button 2 as a hover press', () 
   assert.equal(tap(100), 'undo');
 });
 
-test('lower then upper arms one zoom drag, while lower double-click and upper double-click retain history actions', () => {
+test('lower tapped then upper held is zoom mode until the upper button is let go; the double taps keep their history actions', () => {
 	const shortcuts = new PenButtonShortcuts({ navigation: true });
-	assert.deepEqual([[2, 0], [4, 100], [4, 650], [4, 750], [2, 1300], [2, 1400]]
-		.map(([button, time]) => click(shortcuts, button, time)), [null, 'zoom-next', null, 'redo', null, 'undo']);
-
-	click(shortcuts, 2, 2100);
-	shortcuts.update(event('pointerdown', 4), 2200);
-	shortcuts.update(event('pointermove', 4, { clientY: 125 }), 2220);
-	shortcuts.update(event('pointermove', 4), 2240);
-	assert.equal(shortcuts.update(event('pointerup', 0), 2260), null);
-	assert.equal(click(shortcuts, 4, 2400), null);
-	assert.equal(click(shortcuts, 2, 2500), null);
+	assert.equal(click(shortcuts, 2, 0), null);
+	assert.equal(shortcuts.update(event('pointerdown', 4), 100), 'zoom-hold');
+	assert.equal(shortcuts.zooming, true);
+	// Touching, lifting and touching again, held for longer than any tap: still zoom mode, and nothing else fires.
+	for (const [buttons, at] of [[5, 300], [4, 900], [5, 1200], [4, 1800]]) assert.equal(shortcuts.update(event('pointermove', buttons, { clientY: at / 10 }), at), null);
+	assert.equal(shortcuts.update(event('pointerup', 0), 2000), 'zoom-end');
+	assert.equal(shortcuts.zooming, false);
+	// The chord's own press was no tap: one upper tap after it is only a first tap.
+	assert.equal(click(shortcuts, 4, 2100), null);
+	assert.equal(click(shortcuts, 4, 2250), 'redo');
+	assert.equal(click(shortcuts, 2, 3000), null);
+	assert.equal(click(shortcuts, 2, 3150), 'undo');
+	// Upper tapped twice after a lower tap: the first upper press is the chord, so it zooms and ends; no redo from it.
+	assert.equal(click(shortcuts, 2, 4000), null);
+	assert.equal(shortcuts.update(event('pointerdown', 4), 4100), 'zoom-hold');
+	assert.equal(shortcuts.update(event('pointerup', 0), 4150), 'zoom-end');
+	assert.equal(click(shortcuts, 4, 4250), null);
 });
 
-test('the ordered zoom shortcut allows a longer pause without changing the undo double-click interval', () => {
+test('the zoom chord allows a longer pause than a double tap, and the other order or a long pause is not a chord', () => {
 	const shortcuts = new PenButtonShortcuts({ navigation: true });
 	assert.equal(click(shortcuts, 2, 0), null);
 	assert.equal(click(shortcuts, 2, 500), null);
-	assert.equal(click(shortcuts, 4, 1100), 'zoom-next');
+	assert.equal(shortcuts.update(event('pointerdown', 4), 1100), 'zoom-hold');
+	assert.equal(shortcuts.update(event('pointerup', 0), 1200), 'zoom-end');
+	const other = new PenButtonShortcuts({ navigation: true });
+	assert.equal(click(other, 4, 0), null);
+	assert.equal(click(other, 2, 200), null);
+	assert.equal(other.zooming, false);
+	const late = new PenButtonShortcuts({ navigation: true });
+	assert.equal(click(late, 2, 0), null);
+	assert.equal(late.update(event('pointerdown', 4), 900), null);
+	assert.equal(late.zooming, false);
+});
+
+test('a tap the display reports counts however far the pen drifts under the thumb; a driver-only tap still may not drift', () => {
+	const shortcuts = new PenButtonShortcuts({ navigation: true });
+	const tap = (button, at, dx, native) => {
+		shortcuts.update(event('pointerdown', button, { native }), at);
+		shortcuts.update(event('pointermove', button, { clientX: 100 + dx, placed: native }), at + 60);
+		return shortcuts.update(event('pointerup', 0, { clientX: 100 + dx, native }), at + 120);
+	};
+	assert.equal(tap(2, 0, 24, true), null);
+	assert.equal(tap(2, 200, 24, true), 'undo');
+	assert.equal(tap(2, 1000, 24, false), null);
+	assert.equal(tap(2, 1200, 24, false), null);
 });

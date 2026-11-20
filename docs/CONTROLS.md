@@ -56,11 +56,12 @@ ScrollMind responds to the standard mouse-button actions assigned in the Wacom d
 | Lower | Double-tap while hovering | Undo |
 | Upper | Hold, then touch and drag the tip | Scrolls (Grid mode scrolls in both directions). Holding alone, or moving the pen while it hovers, scrolls nothing (on the Wacom One 12; a driver's Hover Click on Windows scrolls while hovering). |
 | Upper | Double-tap while hovering | Redo |
-| Lower, then upper, tapped quickly (within 0.7 seconds) | Then tap and drag the tip | Zooms around the tip: drag up to zoom in, down to zoom out. Lifting the tip returns the pen to normal. |
+| Upper | Held | Scroll mode until it is let go: every tap and drag of the tip scrolls, lifting the tip between drags. |
+| Lower tapped, then upper pressed quickly (within 0.7 seconds) and held | Tap and drag the tip | Zoom mode until the upper button is let go: every tap and drag zooms around the tip, drag up to zoom in, down to zoom out. Letting go of the upper button returns the pen to normal. |
 
 A tap of a button is a press of at most half a second in which the pen stays put, within a few millimeters; a longer press is a hold. A single button click does nothing. Pressing the erase button during an existing stroke does not erase until you lift and touch down again. Each erase drag ends when the tip lifts and undoes together. Erasing and scrolling do not count as double-click commands. The toolbar eraser and a pen's rear eraser also erase continuously on contact.
 
-The zoom stroke must be lower first, then upper, with the tip hovering; upper then lower, or a long pause between them, does nothing. Escape cancels an armed zoom. The sidebar zoom buttons, a trackpad pinch, and Ctrl + wheel also zoom. To move ink with the pen, choose Select in the pen bar.
+The zoom chord must be lower first, then upper, with the tip hovering; upper then lower, or a long pause between them, does nothing, and the upper press of a zoom chord is not a tap. Escape ends zoom mode. A tap the display itself reports counts however far the pen drifts under the thumb. The sidebar zoom buttons, a trackpad pinch, and Ctrl + wheel also zoom. To move ink with the pen, choose Select in the pen bar.
 
 Useful ExpressKey assignments are ⌘Z, ⌘⇧Z, B, E, V, H, and Tab (Ctrl+Z and Ctrl+Y on Windows). A ring or strip assigned to vertical scrolling moves along the page. ScrollMind does not change the driver's assignments.
 
@@ -71,7 +72,7 @@ In **Wacom Tablet Properties**, keep **Use Windows Ink** turned on so the pen re
 The driver's **Side Switch Mode** decides which pen-button features work:
 
 - **Click & Tap** (recommended): with the lower switch on **Right Click**, hold it and touch or drag the tip across strokes to erase. The driver sends no clicks while hovering, so hover double-click undo/redo is unavailable. Assign ExpressKeys (or the upper switch as a keystroke) to **Ctrl+Z** and **Ctrl+Y** instead.
-- **Hover Click**: with the lower switch on **Right Click** and the upper switch on **Middle Click**, double-clicking while hovering undoes (lower) or redoes (upper). Tapping lower then upper arms tap-and-drag zoom for the next tip contact. Use **E** or the pen's rear eraser to erase.
+- **Hover Click**: with the lower switch on **Right Click** and the upper switch on **Middle Click**, double-clicking while hovering undoes (lower) or redoes (upper). Tapping lower, then holding upper, makes every tap and drag zoom until upper is let go. Use **E** or the pen's rear eraser to erase.
 
 In either mode, **Middle Click** on the upper switch scrolls when held and dragged.
 

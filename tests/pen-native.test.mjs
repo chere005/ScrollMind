@@ -97,11 +97,16 @@ test('a lower switch reported only by the display undoes on a double tap, and on
 	press(r, 'lower', 300); assert.deepEqual(r.actions, ['undo']);
 });
 
-test('lower then upper, quickly, arms the zoom stroke; the other order or a long pause does not', () => {
+test('lower tapped then upper pressed, quickly, is zoom mode until the upper switch lets go; the other order or a long pause is not', () => {
 	let r = rig();
 	r.hover();
-	press(r, 'lower', 100); press(r, 'upper', 300);
-	assert.deepEqual(r.actions, ['zoom-next']);
+	press(r, 'lower', 100);
+	r.native({ upper: true, range: true }, 300);
+	r.native({ upper: true, tip: true, range: true }, 500);
+	r.native({ upper: true, range: true }, 900);
+	assert.deepEqual(r.actions, ['zoom-hold']);
+	r.native({ range: true }, 1500);
+	assert.deepEqual(r.actions, ['zoom-hold', 'zoom-end']);
 	r = rig(); r.hover();
 	press(r, 'upper', 100); press(r, 'lower', 300);
 	assert.deepEqual(r.actions, []);

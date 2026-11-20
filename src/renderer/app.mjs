@@ -31,7 +31,7 @@ if (platform !== 'darwin') {
     $('#help-space').insertAdjacentHTML('beforeend', '<dt>Close scroll / Quit</dt><dd><kbd>Ctrl+W</kbd> / <kbd>Alt+F4</kbd></dd>');
   }
 }
-let zoomNextTip = false, lastPointerType = null, testMode = false;
+let zoomHeld = false, lastPointerType = null, testMode = false;
 // Zoom by dragging the pen tip: up zooms in, down zooms out, as in NoteMind; 140 px is a doubling.
 const ZOOM_DRAG_RATE = Math.LN2 / 140;
 let scroll = new Scroll();
@@ -167,7 +167,7 @@ function updateControls() {
   document.body.classList.toggle('night', paperTone(settings) === 'night'); updateCursor();
 }
 function setTool(value, explicit = true) {
-  finishGesture(); zoomNextTip = false; tool = value; mousePen = value === 'pen' && explicit;
+  finishGesture(); zoomHeld = false; tool = value; mousePen = value === 'pen' && explicit;
   if (tool !== 'select') selection.clear();
   if (tool !== 'select') diagramSelection = null;
   updateControls(); requestRender();
@@ -179,7 +179,7 @@ function updateCursor() {
   overlay.style.cursor = penInput.placing ? 'none'
     : ['pan', 'move', 'move-node'].includes(active?.kind) ? 'grabbing'
     : spaceDown || tool === 'hand' ? 'grab'
-    : pen && zoomNextTip ? 'zoom-in'
+    : pen && zoomHeld ? 'zoom-in'
     : tool === 'select' || (tool === 'pen' && !mousePen && !pen) ? 'default' : 'crosshair';
 }
 function setOffset(value, persist = true, x = viewX()) {
@@ -358,16 +358,17 @@ function penShortcut(event) {
   if (!action || (event.pointerType === 'mouse' && action !== 'redo')) return false;
   trace(`action ${action}`);
   finishGesture();
-  if (action === 'zoom-next') {
-    zoomNextTip = true;
+  // The zoom chord: every tap and drag zooms while its upper button stays down.
+  if (action === 'zoom-hold' || action === 'zoom-end') {
+    zoomHeld = action === 'zoom-hold';
     updateCursor();
   } else safely(action);
   return true;
 }
 function eventTool(event) {
+  if (event.pointerType === 'pen' && zoomHeld) return 'zoom';
   if (spaceDown || (event.buttons & 4)) return 'hand';
   if (event.pointerType === 'pen' && ((event.buttons & 34) || event.button === 5)) return 'eraser';
-  if (event.pointerType === 'pen' && zoomNextTip) return 'zoom';
   if (event.pointerType === 'mouse' && tool === 'pen' && !mousePen) return 'select';
   return tool;
 }
@@ -473,7 +474,6 @@ function pointerDown(event) {
   if (event.pointerType === 'pen') trace(`down tool=${currentTool} B=${event.buttons} tipStarted=${event.tipStarted} contact=${contact(event)}`);
   if (barrelErase ? !event.tipStarted : currentTool !== 'hand' && !contact(event)) return;
   if (currentTool === 'hand' && !spaceDown && tool !== 'hand' && placedHover(event)) return;
-  if (event.tipStarted) zoomNextTip = false;
   event.preventDefault(); overlay.focus({ preventScroll: true });
   const point = world(event);
   if (gridMode() && startDiagramGesture(currentTool, event, point)) {
@@ -640,7 +640,7 @@ function route(event) {
 }
 for (const type of ['pointerenter', 'pointerdown', 'pointermove', 'pointerup']) overlay.addEventListener(type, handlePointer);
 function resetShortcuts() {
-  penInput.reset(); penShortcuts.reset(); middleClicks.reset(); zoomNextTip = false; lastPointerType = null;
+  penInput.reset(); penShortcuts.reset(); middleClicks.reset(); zoomHeld = false; lastPointerType = null;
 }
 overlay.addEventListener('contextmenu', () => trace('dom contextmenu'));
 overlay.addEventListener('pointercancel', event => {
@@ -884,7 +884,7 @@ document.addEventListener('keydown', event => {
     else if (key === 'delete' || key === 'backspace') action = 'delete'; else if (key === 'tab') action = 'toggle-toolbar'; else if (key === '?' || key === 'f1') action = 'help'; else if (key === 'f11') action = 'fullscreen'; else if (key === 'home') action = 'home';
     else if (key === ' ') { event.preventDefault(); if (!event.repeat) { finishGesture(); spaceDown = true; updateCursor(); } return; }
     else if (key === 'escape') {
-      event.preventDefault(); if (active) finishGesture(true); else if (zoomNextTip) { zoomNextTip = false; updateCursor(); } else if (!$('#context-menu').hidden) $('#context-menu').hidden = true;
+      event.preventDefault(); if (active) finishGesture(true); else if (zoomHeld) { zoomHeld = false; penShortcuts.reset(); updateCursor(); } else if (!$('#context-menu').hidden) $('#context-menu').hidden = true;
       else if (selection.size || diagramSelection) { selection.clear(); diagramSelection = null; updateControls(); requestRender(); } else if (!$('#sidebar').hidden) toggleSidebar(false); else bridge.leaveFullscreen(); return;
     } else if (key.startsWith('arrow')) {
       event.preventDefault(); finishGesture(); const amount = event.shiftKey ? 10 : 1;
