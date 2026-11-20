@@ -9,11 +9,12 @@
     "start": "electron .",
     "test": "node --test tests/*.test.mjs",
     "test:ui": "playwright test",
-    "test:pen": "node --test tests/pen-shortcuts.test.mjs tests/pen-input.test.mjs && playwright test -g \"Pen button contract\"",
+    "test:pen": "node --test tests/pen-shortcuts.test.mjs tests/pen-input.test.mjs tests/pen-native.test.mjs tests/pen-helper.test.mjs && playwright test -g \"Pen button contract\"",
     "preflight": "npm test && npm run test:ui",
     "icon": "node tools/make-icon.mjs",
-    "build:mac": "electron-builder --mac --dir",
-    "release:mac": "npm run preflight && node tools/release-mac.mjs",
+    "build:pen": "node tools/build-pen-helper.mjs",
+    "build:mac": "npm run build:pen && electron-builder --mac --dir",
+    "release:mac": "npm run build:pen && npm run preflight && node tools/release-mac.mjs",
     "release:win": "node tools/release-win.mjs --check && npm run preflight && node tools/release-win.mjs",
     "build:win": "electron-builder --win",
     "build:win:dir": "electron-builder --win --dir"
@@ -45,7 +46,13 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "preAutoEntitlements": false,
-      "notarize": false
+      "notarize": false,
+      "extraResources": [
+        {
+          "from": "build/bin/scroll-pen",
+          "to": "scroll-pen"
+        }
+      ]
     },
     "fileAssociations": [
       {

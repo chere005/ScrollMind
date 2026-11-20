@@ -46,9 +46,9 @@ A selection rectangle selects complete strokes that it crosses. Each drawing, er
 
 ## Wacom buttons
 
-ScrollMind responds to the standard mouse-button actions assigned in the Wacom driver. Assign the lower switch to **Right Click** and the upper switch to **Middle Click**.
+ScrollMind responds to the standard mouse-button actions assigned in the Wacom driver: on a tablet or pen display it does not read natively, assign the lower switch to **Right Click** and the upper switch to **Middle Click**. On a **Wacom One 12** on a Mac, ScrollMind reads the two side switches from the display itself, so every row below works whatever Wacom Center assigns to them, including **Pan/Scroll** on the upper switch (the driver's own scrolling still scrolls the page). That needs no permission and does not stop the driver from using the pen.
 
-**This is the pen-button contract.** It is the same in Scroll and Grid mode, and every release runs the tests that check each line (the *Pen button contract* tests in `tests/ui.spec.mjs`, plus `tests/pen-shortcuts.test.mjs` and `tests/pen-input.test.mjs`; `npm run test:pen` runs them alone). Change this behavior only on purpose, and change this page and those tests with it.
+**This is the pen-button contract.** It is the same in Scroll and Grid mode, and every release runs the tests that check each line (the *Pen button contract* tests in `tests/ui.spec.mjs`, plus `tests/pen-shortcuts.test.mjs` and `tests/pen-input.test.mjs`; `npm run test:pen` runs them alone, with the checks of the display's own button reports). Change this behavior only on purpose, and change this page and those tests with it.
 
 | Pen button | Gesture | Result |
 | --- | --- | --- |

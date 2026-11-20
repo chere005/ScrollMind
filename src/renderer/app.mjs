@@ -31,7 +31,7 @@ if (platform !== 'darwin') {
     $('#help-space').insertAdjacentHTML('beforeend', '<dt>Close scroll / Quit</dt><dd><kbd>Ctrl+W</kbd> / <kbd>Alt+F4</kbd></dd>');
   }
 }
-let zoomNextTip = false, lastPointerType = null;
+let zoomNextTip = false, lastPointerType = null, testMode = false;
 // Zoom by dragging the pen tip: up zooms in, down zooms out, as in NoteMind; 140 px is a doubling.
 const ZOOM_DRAG_RATE = Math.LN2 / 140;
 let scroll = new Scroll();
@@ -584,9 +584,22 @@ function pointerUp(event) {
 }
 function handlePointer(rawEvent) {
   if (!loaded || loadError || fileOperation || rawEvent.pointerType === 'touch') return;
-  const event = penInput.update(rawEvent);
+  route(penInput.update(rawEvent));
+}
+// The display's own report of its side switches. The state is always kept; the buttons act only while this window has focus.
+function handleNativePen(state) {
+  for (const event of penInput.native(state)) if ((document.hasFocus() || testMode) && loaded && !loadError && !fileOperation) route(event);
+}
+bridge.onNativePen?.(handleNativePen);
+function route(event) {
   if (lastPointerType !== event.pointerType) { lastPointerType = event.pointerType; updateCursor(); }
   if (penShortcut(event)) { event.preventDefault(); return; }
+  if (event.native) {
+    // A switch change reported by the display starts no drag; the driver's own scrolling and the pen's contact do that.
+    if (active?.kind === 'pan' && active.temporary && !(event.buttons & 4)) finishGesture();
+    updateCursor();
+    return;
+  }
   if (event.pointerType === 'pen' && event.button === 2) event.preventDefault();
   if (event.type === 'pointerdown') pointerDown(event);
   else if (event.type === 'pointermove') pointerMove(event);
@@ -605,7 +618,10 @@ overlay.addEventListener('lostpointercapture', event => {
   if (active?.nativePointerId === event.pointerId) finishGesture(true);
 });
 overlay.addEventListener('wheel', event => {
-  event.preventDefault(); if (active || fileOperation || !loaded || loadError) return;
+  event.preventDefault();
+  // The driver scrolling while the upper button is down is not a tap of it.
+  if (penInput.upperHeld) penShortcuts.cancel();
+  if (active || fileOperation || !loaded || loadError) return;
   const multiplier = event.deltaMode === 1 ? 24 : event.deltaMode === 2 ? height : 1;
   if (event.ctrlKey || event.metaKey) { zoomAt(zoomLevel() * Math.exp(-event.deltaY * multiplier * .003), event.clientX, event.clientY); return; }
   const canPanX = gridMode() || zoomLevel() !== 1 || scrollX !== 0;
@@ -932,7 +948,8 @@ async function initialize() {
     $('#version').textContent = `ScrollMind ${info.version}`;
     for (const display of displays) { const option = document.createElement('option'); option.value = display.id; option.textContent = display.label; option.selected = display.selected; $('#display-select').append(option); }
     loaded = true;
-    if (info.testMode) window.scrollmindDebug = Object.freeze({ getSnapshot: snapshot, getSelection: () => [...selection], getOffsetY: () => offsetY, setOffsetY: value => setOffset(value), getWorkspace: () => workspace });
+    testMode = Boolean(info.testMode);
+    if (info.testMode) window.scrollmindDebug = Object.freeze({ getSnapshot: snapshot, getSelection: () => [...selection], getOffsetY: () => offsetY, getNativeButtons: () => penInput.hid, nativePen: handleNativePen, setOffsetY: value => setOffset(value), getWorkspace: () => workspace });
     message(result.recovered ? 'Recovered from backup · saved locally' : 'Saved'); if (!result.document) changed(); updateControls(); renderScrolls(); renderMarkers(); resize();
   } catch (error) { loadError = error.message; message('Couldn’t open the document · click to open folder', true); console.error(error); }
 }

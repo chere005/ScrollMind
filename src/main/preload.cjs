@@ -35,5 +35,6 @@ contextBridge.exposeInMainWorld('scrollmind', Object.freeze({
   moveToDisplay: (id) => ipcRenderer.invoke('display:move', id),
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   onCommand: (callback) => subscribe('app:command', callback),
+  onNativePen: (callback) => subscribe('pen:native', callback),
   onBeforeClose: (callback) => subscribe('app:before-close', callback),
 }));

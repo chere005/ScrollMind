@@ -112,6 +112,19 @@ async function verifyNotarizedApp(team) {
   console.log('Stapled notarization ticket and Gatekeeper acceptance verified.');
 }
 
+/** The side-button helper must ship inside the app, signed with the app's identity, and still read a report. */
+async function verifyPenHelper(team) {
+  const helper = path.join(app, 'Contents', 'Resources', 'scroll-pen');
+  const stat = await fs.stat(helper).catch(() => null);
+  if (!stat?.isFile() || !(stat.mode & 0o111)) throw new Error('The packaged app has no executable scroll-pen helper. Run npm run build:pen.');
+  await command('codesign', ['--verify', '--strict', helper]);
+  const details = (await command('codesign', ['--display', '--verbose=4', helper])).stderr;
+  if (!details.includes('Authority=Developer ID Application:') || !details.includes(`TeamIdentifier=${team}`) || !/flags=.*\(.*runtime/.test(details)) throw new Error('The packaged scroll-pen helper is not signed with the Developer ID and Hardened Runtime.');
+  const decoded = JSON.parse((await command(helper, ['--decode', '1e 01 c4'])).stdout);
+  if (decoded.k !== 'buttons' || decoded.upper !== true || decoded.lower !== false || decoded.range !== true) throw new Error('The packaged scroll-pen helper does not read the display\'s upper button.');
+  console.log('Wacom side-button helper packaged, signed, and reading reports.');
+}
+
 async function verifyUpdateFeed() {
   const feed = pkg.build?.publish?.find?.((entry) => entry.provider === 'github');
   if (!feed) throw new Error('build.publish must name the GitHub release feed.');
@@ -153,6 +166,7 @@ async function main() {
   }
   await verifySignedApp(team);
   await verifyUpdateFeed();
+  await verifyPenHelper(team);
   if (!options.has('--resume')) await archive(uploadZip);
   if (signOnly) {
     await writeFeed(feedFile, { version: pkg.version, file: uploadZip });

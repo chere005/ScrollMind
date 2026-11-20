@@ -7,6 +7,7 @@ const { createDocumentWorkspaces } = require('./documents.cjs');
 const { createDocumentIO } = require('./document-io.cjs');
 const { findScrollArgument, commandForInput } = require('./launch-args.cjs');
 const { updateEligibility, loopbackFeed, macDeveloperId, createUpdater } = require('./updater.cjs');
+const { helperPath, createNativePen } = require('./native-pen.cjs');
 
 app.setName('ScrollMind');
 if (process.platform === 'win32') app.setAppUserModelId('com.seancheren.scrollmind');
@@ -32,14 +33,32 @@ let updates = null;
 let updatesOffReason = 'Updates are not available.';
 let installAfterClose = false;
 
-function logUpdate(level, text) {
-  const file = path.join(app.getPath('logs'), 'update.log');
-  fs.mkdir(path.dirname(file), { recursive: true })
-    .then(async () => {
-      if ((await fs.stat(file).catch(() => null))?.size > 256 * 1024) await fs.rename(file, file.replace(/\.log$/, '.old.log'));
-      await fs.appendFile(file, `${new Date().toISOString()} ${level} ${String(text).slice(0, 500)}\n`);
-    })
-    .catch(() => {});
+function logTo(name) {
+  return (level, text) => {
+    const file = path.join(app.getPath('logs'), name);
+    fs.mkdir(path.dirname(file), { recursive: true })
+      .then(async () => {
+        if ((await fs.stat(file).catch(() => null))?.size > 256 * 1024) await fs.rename(file, file.replace(/\.log$/, '.old.log'));
+        await fs.appendFile(file, `${new Date().toISOString()} ${level} ${String(text).slice(0, 500)}\n`);
+      })
+      .catch(() => {});
+  };
+}
+const logUpdate = logTo('update.log');
+const logPen = logTo('pen.log');
+
+// The Wacom One 12's side buttons, read from the display itself so the driver's button assignments cannot hide them.
+let nativePen = null;
+function forwardNativePen(state) {
+  if (window && !window.isDestroyed()) window.webContents.send('pen:native', state);
+}
+function startNativePen() {
+  // Tests drive the same path by hand: app.evaluate(() => globalThis.scrollmindNativePen({ lower, upper, tip, range })).
+  if (testing) { globalThis.scrollmindNativePen = forwardNativePen; return; }
+  const file = helperPath({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, root: path.join(__dirname, '..', '..'), platform: process.platform });
+  if (!file) return;
+  nativePen = createNativePen({ file, onState: forwardNativePen, log: (text) => logPen('info', text) });
+  nativePen.start();
 }
 
 function startUpdates() {
@@ -308,6 +327,7 @@ async function createWindow() {
   installHandlers();
   createMenu();
   startUpdates();
+  startNativePen();
   await window.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 
@@ -325,6 +345,7 @@ else {
     if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); }
   });
   app.on('before-quit', (event) => { if (window && !allowClose) { event.preventDefault(); requestClose(); } });
+  app.on('will-quit', () => nativePen?.stop());
   app.whenReady().then(async () => {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     // Pages may load nothing remote. Requests with no page behind them are the main process's own: the updater's feed and download.

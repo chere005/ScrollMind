@@ -10,7 +10,7 @@ The public macOS archive is Developer ID signed with Hardened Runtime. **The cur
 
 A release build requires an Apple silicon Mac, Xcode command-line tools, installed npm dependencies, and a Developer ID Application certificate with its private key in the signing keychain. Configure `build.mac.identity` in `package.json` with the certificate's identity qualifier, without the `Developer ID Application:` prefix. Keep credentials and private keys outside the repository.
 
-`npm run release:mac` runs the preflight checks, builds the arm64 macOS app, verifies app and nested signatures, checks the packaged version and entitlements, and creates:
+`npm run release:mac` first compiles the Wacom side-button helper (`tools/pen/scroll-pen.swift`, needs the Xcode command-line tools) into `build/bin/scroll-pen`, which ships in `Contents/Resources` and is signed with the app; it runs the preflight checks, builds the arm64 macOS app, verifies app and nested signatures, checks the packaged version and entitlements, and creates:
 
 ```text
 dist/ScrollMind-<version>-<arch>-signed.zip

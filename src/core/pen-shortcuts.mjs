@@ -24,6 +24,12 @@ export class PenButtonShortcuts {
     this.#candidate = null;
   }
 
+  /** Something other than a click happened while a button was down (the driver scrolling, say): that press is not a tap. */
+  cancel() {
+    this.#candidate = null;
+    for (const state of this.#pointers.values()) if (state.press) state.press.valid = false;
+  }
+
   update(event, now = performance.now()) {
     if (event?.type === 'blur') {
       this.reset();

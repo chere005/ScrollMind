@@ -1602,6 +1602,126 @@ for (const mode of ['scroll', 'grid']) {
 			expect(await strokes()).toHaveLength(2);
 		});
 
+		// The Wacom One 12 reports its side switches itself, so these work however the driver assigns them (the upper one is often
+		// Pan/Scroll, which no page ever sees as a button). The display's reports go to the page the way the helper's do; they are
+		// injected inside the page so a press lasts exactly as long as the test says, whatever the test runner's latency.
+		const native = state => page.evaluate(value => window.scrollmindDebug.nativePen(value), state);
+		const nativeClick = key => page.evaluate(async name => {
+			window.scrollmindDebug.nativePen({ [name]: true, range: true });
+			await new Promise(resolve => setTimeout(resolve, 60));
+			window.scrollmindDebug.nativePen({ range: true });
+		}, key);
+		const armNativeZoom = async () => { await nativeClick('lower'); await nativeClick('upper'); await expect(page.locator('#overlay')).toHaveCSS('cursor', 'zoom-in'); };
+
+		test('display buttons: reports from the display reach the page through the main process', async () => {
+			await app.evaluate((_electron, value) => globalThis.scrollmindNativePen(value), { upper: true, range: true });
+			await expect.poll(() => page.evaluate(() => window.scrollmindDebug.getNativeButtons())).toEqual({ lower: false, upper: true });
+			await app.evaluate((_electron, value) => globalThis.scrollmindNativePen(value), { lower: true, range: true });
+			await expect.poll(() => page.evaluate(() => window.scrollmindDebug.getNativeButtons())).toEqual({ lower: true, upper: false });
+			await app.evaluate((_electron, value) => globalThis.scrollmindNativePen(value), { range: true });
+			await expect.poll(() => page.evaluate(() => window.scrollmindDebug.getNativeButtons())).toEqual({ lower: false, upper: false });
+		});
+
+		test('display buttons: an upper switch the driver hides still redoes on a double tap and does nothing on one', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await strokes()).toEqual([]);
+			await nativeClick('upper');
+			expect(await strokes()).toEqual([]);
+			await nativeClick('upper');
+			await expect.poll(strokes).toEqual(written);
+		});
+
+		test('display buttons: a lower switch the driver hides still undoes on a double tap and does nothing on one', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			await nativeClick('lower');
+			expect(await strokes()).toEqual(written);
+			await nativeClick('lower');
+			await expect.poll(async () => (await strokes()).length).toBe(0);
+		});
+
+		test('display buttons: the same switch reported by the display and by the driver counts once', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			await draw({ x: 380, y: 450 }, { x: 480, y: 490 });
+			const echoed = () => page.evaluate(async () => {
+				const overlay = document.querySelector('#overlay');
+				const fire = (type, init) => overlay.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 44, pointerType: 'pen', isPrimary: true, clientX: 750, clientY: 400, pressure: 0, ...init }));
+				const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+				window.scrollmindDebug.nativePen({ lower: true, range: true });
+				fire('pointerdown', { buttons: 2, button: 2 });
+				await wait(50);
+				fire('pointerup', { buttons: 0, button: 2 });
+				window.scrollmindDebug.nativePen({ range: true });
+			});
+			await pointer('pointermove', 750, 400, { pressure: 0, buttons: 0, button: -1 });
+			await echoed();
+			await echoed();
+			await expect.poll(async () => (await strokes()).length).toBe(1);
+			await page.waitForTimeout(600);
+			expect(await strokes()).toHaveLength(1);
+		});
+
+		test('display buttons: lower then upper, quickly, arms zoom for the next contact, and up zooms in', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			const before = await zoom();
+			await armNativeZoom();
+			await dragTip(640, 540, 400);
+			expect(await strokes()).toEqual(written);
+			expect(await zoom()).toBeCloseTo(before * 2, 1);
+			await expect(page.locator('#overlay')).toHaveCSS('cursor', 'crosshair');
+			await ink(700, 600);
+			expect(await strokes()).toHaveLength(2);
+		});
+
+		test('display buttons: the driver scrolling while the upper switch is down scrolls the page and is not a tap', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			await page.keyboard.press(`${modifier}+z`);
+			const start = await origin();
+			await native({ upper: true, range: true });
+			await page.locator('#overlay').dispatchEvent('wheel', { deltaX: 0, deltaY: 80 });
+			await native({ range: true });
+			expect((await origin()).y).toBe(start.y + 80);
+			// That press did not count, so one clean tap after it is still only a single tap.
+			await nativeClick('upper');
+			expect(await strokes()).toEqual([]);
+			await nativeClick('upper');
+			await expect.poll(strokes).toEqual(written);
+		});
+
+		test('display buttons: the upper switch held with the tip touching drags the page and never inks', async () => {
+			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
+			const written = await strokes();
+			const start = await origin();
+			await native({ upper: true, range: true });
+			await pointer('pointerdown', 750, 500);
+			await pointer('pointermove', 690, 420, { button: -1 });
+			await pointer('pointerup', 690, 420, { pressure: 0, buttons: 0 });
+			await native({ range: true });
+			expect(await strokes()).toEqual(written);
+			expect(await origin()).toEqual({ x: start.x + (mode === 'grid' ? 60 : 0), y: start.y + 80 });
+			await ink(600, 600);
+			expect(await strokes()).toHaveLength(2);
+		});
+
+		test('display buttons: the lower switch held with the tip touching erases, and a tap of it alone erases nothing', async () => {
+			await draw({ x: 200, y: 250 }, { x: 400, y: 250 });
+			const written = await strokes();
+			await nativeClick('lower');
+			expect(await strokes()).toEqual(written);
+			await pointer('pointermove', 300, 250, { pressure: 0, buttons: 0, button: -1 });
+			await native({ lower: true, range: true });
+			await pointer('pointermove', 300, 250, { pressure: 0.6, buttons: 1, button: 0 });
+			await expect.poll(async () => (await strokes()).length).toBe(0);
+			await pointer('pointermove', 300, 250, { pressure: 0, buttons: 0, button: 0 });
+			await native({ range: true });
+			await page.keyboard.press(`${modifier}+z`);
+			expect(await strokes()).toEqual(written);
+		});
+
 		test('Escape cancels an armed zoom and the next contact writes', async () => {
 			await draw({ x: 380, y: 250 }, { x: 480, y: 290 });
 			await armZoom();
