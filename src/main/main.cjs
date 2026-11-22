@@ -9,6 +9,7 @@ const { findScrollArgument, commandForInput } = require('./launch-args.cjs');
 const { updateEligibility, loopbackFeed, macDeveloperId, createUpdater } = require('./updater.cjs');
 const { helperPath, createNativePen, pagePoint } = require('./native-pen.cjs');
 const { penAccessPrompt } = require('./pen-access.cjs');
+const { createICloudCopy, iCloudDriveRoot } = require('./icloud-copy.cjs');
 
 app.setName('ScrollMind');
 if (process.platform === 'win32') app.setAppUserModelId('com.seancheren.scrollmind');
@@ -19,6 +20,19 @@ if (testing && process.platform === 'win32') app.commandLine.appendSwitch('disab
 const dataDirectory = process.env.SCROLLMIND_DATA_DIR || path.join(app.getPath('documents'), 'ScrollMind');
 app.setPath('userData', path.join(dataDirectory, 'App'));
 app.setAppLogsPath(path.join(dataDirectory, 'Logs'));
+// Copy to iCloud Drive (src/main/icloud-copy.cjs). A test run, or one with its own writing folder, never reaches the real iCloud
+// Drive: only SCROLLMIND_ICLOUD_DIR gives it a place to copy to.
+const icloudCopy = (() => {
+  const given = process.env.SCROLLMIND_ICLOUD_DIR;
+  const root = given ? path.dirname(path.resolve(given)) : testing || process.env.SCROLLMIND_DATA_DIR ? null : iCloudDriveRoot(app.getPath('home'));
+  return createICloudCopy({
+    dataDirectory, target: given ? path.resolve(given) : root && path.join(root, 'ScrollMind'), iCloudRoot: root,
+    prefsFile: path.join(dataDirectory, 'App', 'icloud-copy.json'), stateFile: path.join(dataDirectory, 'App', 'icloud-copy-state.json'),
+    log: (line) => logTo('icloud-copy.log')('info', line),
+  });
+})();
+/** The IPC calls that change writing; each brings the iCloud copies up to date once writing settles. */
+const WRITING_CHANGES = new Set(['notebook:save', 'scroll:save-changes', 'scroll:open', 'workspace:new', 'workspace:rename', 'workspace:delete', 'workspace:close', 'workspace:select']);
 
 let window;
 let store;
@@ -165,6 +179,7 @@ function createMenu() {
       action('New', 'new-scroll'),
       action('Open…', 'open-sm'),
       { label: 'Export', submenu: [action('ScrollMind (.sm)…', 'export-sm'), action('SVG (.svg)…', 'export-svg'), action('PDF (.pdf)…', 'export-pdf')] },
+      { label: 'Copy to iCloud Drive', type: 'checkbox', checked: icloudCopy.isEnabled(), visible: icloudCopy.isAvailable(), click: (item) => { void icloudCopy.setEnabled(item.checked); } },
       { type: 'separator' },
       { label: 'Open Writing Folder', click: async () => { await fs.mkdir(dataDirectory, { recursive: true }); await shell.openPath(dataDirectory); } },
       { type: 'separator' },
@@ -201,7 +216,9 @@ function installHandlers() {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) {
         throw new Error('This action is unavailable.');
       }
-      return callback(...args);
+      const result = callback(...args);
+      if (WRITING_CHANGES.has(channel)) Promise.resolve(result).then(() => icloudCopy.changed(), () => {});
+      return result;
     });
   }
   handle('notebook:load', () => store.load());
@@ -241,6 +258,7 @@ function installHandlers() {
     }
     await store.flush();
     await store.close();
+    await icloudCopy.flush().catch(() => {});
     allowClose = true;
     if (installAfterClose && updates) {
       setImmediate(() => {
@@ -354,6 +372,7 @@ async function createWindow() {
   createMenu();
   startUpdates();
   startNativePen();
+  setTimeout(() => { void icloudCopy.sync(); }, 20000).unref();
   await window.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 

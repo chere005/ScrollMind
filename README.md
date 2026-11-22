@@ -40,6 +40,8 @@ Scrolls save automatically in `~/Documents/ScrollMind` (`Documents\ScrollMind` o
 
 Scrolls and Grids have separate workspaces. Export an editable Scroll or Grid as a **.sm** file, which ScrollMind recognizes as either, or export either as vector **SVG** or paginated **PDF**. Opening a native file creates a working copy in its workspace.
 
+On a Mac, **File > Copy to iCloud Drive** (off until ticked) keeps a copy of every Scroll and Grid in iCloud Drive/ScrollMind/Scrolls and /Grids as `<name>.sm`, brought up to date a few seconds after writing settles, at launch and before quitting; copies follow renames and deletions. Your writing folder stays as it is, and changes made to a copy are not brought back. The copies open in ScrollMind on another computer, and in the browser version, whose Open… reads a `.sm` with `src/core/sm-file.mjs`.
+
 See the [pen buttons](docs/PEN-BUTTONS.md) for exactly what each side button of the pen does, the [controls guide](docs/CONTROLS.md) for keyboard shortcuts (Ctrl on Windows), and scroll management, or the [native format reference](docs/SCROLL-FORMAT.md) for storage and recovery details.
 
 ## Development

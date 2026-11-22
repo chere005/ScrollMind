@@ -2,6 +2,10 @@
 
 A **.sm** file is a ScrollMind database: either a Scroll (editable ink, paper settings, the saved view, and navigation points) or a Grid (editable ink, shapes, connections, Grid settings, and its saved view). The SQLite application ID says which, so ScrollMind opens either from its contents whatever the file is named. Early Grid files were named **.smg**; they still open. Export either document for sharing or backup. Working databases may have SQLite WAL companions. Exports include the committed contents.
 
+## Reading a .sm without SQLite
+
+`src/core/sm-file.mjs` reads a **.sm** in a browser: a small read-only reader of the SQLite file format (table b-trees, overflow pages, records) that returns the same validated snapshot the desktop's `readNative()` returns, and the kind from the application ID. It reads files with `journal_mode=DELETE`, which every export and every iCloud Drive copy is; it refuses one still in write-ahead-log mode. `tests/sm-file.test.mjs` compares it with the desktop reader on files the desktop's own storage writes.
+
 ## Files on disk
 
 ScrollMind keeps its data in `~/Documents/ScrollMind` (`Documents\ScrollMind` on Windows):
@@ -17,6 +21,8 @@ ScrollMind keeps its data in `~/Documents/ScrollMind` (`Documents\ScrollMind` on
 | `Grids/workspace.json` | Grid list, open/closed state, and active Grid |
 | `Grids/Deleted Grids/<archive-id>/` | Recoverable deleted Grid and deletion record |
 | `active-workspace` | Most recently viewed workspace |
+| `App/icloud-copy.json`, `App/icloud-copy-state.json` | Whether Copy to iCloud Drive is on, and the copies it made (by document, with the name and a fingerprint of the source) |
+| `Logs/icloud-copy.log` | What the iCloud Drive copy did, and any copy that failed |
 
 Recovery snapshots refresh at startup, first writing, every five minutes, and clean close. Corrupt files are preserved during recovery. Saves are flushed to disk (fsync through writable handles on Windows) and files are replaced by renames, which NTFS journals. Opening an external .sm or .smg creates a managed working copy and leaves the source file intact. Earlier JSON saves migrate automatically, preserving their originals.
 

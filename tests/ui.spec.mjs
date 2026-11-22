@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
@@ -15,6 +15,7 @@ let page;
 let dataDir;
 let penPlatform = 'darwin';
 let extraArgs = [];
+let extraEnv = {};
 
 async function launch() {
   const env = {
@@ -24,6 +25,7 @@ async function launch() {
     SCROLLMIND_EXPORT_DIR: resolve(dataDir, 'Exports'),
     SCROLLMIND_OPEN_PATH: '__cancel__',
     SCROLLMIND_TEST_PEN_PLATFORM: penPlatform,
+    ...extraEnv,
   };
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ args: [root, '--smoke-test', ...extraArgs], cwd: root, env });
@@ -139,6 +141,7 @@ async function pointer(type, x, y, { pressure = 0.6, buttons = 1, button = 0 } =
 test.beforeEach(async () => {
   penPlatform = 'darwin';
   extraArgs = [];
+  extraEnv = {};
   dataDir = await mkdtemp(resolve(tmpdir(), 'scrollmind-ui-'));
   await launch();
 });
@@ -149,6 +152,31 @@ test.afterEach(async ({}, testInfo) => {
   }
   await closeGracefully().catch(async () => { if (app) await app.close().catch(() => {}); });
   await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+});
+
+test('Copy to iCloud Drive keeps a .sm of the Scroll that opens in the browser reader, copying the final save before quitting', async () => {
+  test.skip(process.platform === 'win32', 'the File menu is a Mac menu');
+  await closeGracefully();
+  const cloud = resolve(dataDir, 'iCloud Drive');
+  await mkdir(cloud, { recursive: true });
+  await mkdir(resolve(dataDir, 'App'), { recursive: true });
+  await writeFile(resolve(dataDir, 'App', 'icloud-copy.json'), JSON.stringify({ enabled: true }));
+  extraEnv = { SCROLLMIND_ICLOUD_DIR: resolve(cloud, 'ScrollMind') };
+  await launch();
+  const item = await app.evaluate(({ Menu }) => {
+    const found = Menu.getApplicationMenu().items.find(entry => entry.label === 'File').submenu.items.find(entry => entry.label === 'Copy to iCloud Drive');
+    return found && { visible: found.visible, checked: found.checked, type: found.type };
+  });
+  expect(item).toEqual({ visible: true, checked: true, type: 'checkbox' });
+  await draw();
+  const ids = (await snapshot()).strokes.map(stroke => stroke.id);
+  expect(ids.length).toBe(1);
+  const name = (await workspace()).scrolls.find(scroll => scroll.active).name;
+  await closeGracefully();
+  const { readScrollMindFile } = await import('../src/core/sm-file.mjs');
+  const copy = readScrollMindFile(new Uint8Array(await readFile(resolve(cloud, 'ScrollMind', 'Scrolls', `${name}.sm`))));
+  expect(copy.kind).toBe('scroll');
+  expect(copy.snapshot.strokes.map(stroke => stroke.id)).toEqual(ids);
 });
 
 test('rectangle crossing selects a whole stroke; mouse moves, clipboard edits and undo preserve ink', async () => {
