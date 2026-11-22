@@ -18,5 +18,6 @@ The shared `dtp` and `tdtp` definitions, authorization, and installed result app
 - Build releases with npm run release:mac -- --sign-only, verify the Developer ID signature and installed app, then tag and push checked main and publish the signed ZIP with its SHA-256 checksum.
 - Build Windows releases with npm run release:win; the NSIS installer is unsigned, so never claim Windows signing, and publish the .exe with its SHA-256 only on explicit request.
 - Publish releases with the ZIP first and its dist/latest-mac.yml last, the feed the in-app updater reads; never overwrite a published release's assets.
+- ScrollMind is part of MindSuite: once a release is published, record its tag with `node ../MindSuite/tools/mindsuite-release.mjs record ScrollMind vX.Y.0 --app-repo .` (MindSuite's minor goes up, with a note naming the tag).
 - Release versions bump the minor component unless a version is explicitly requested; never claim notarization without Apple's acceptance and a validated stapled ticket.
 - Keep README.md, docs/CONTROLS.md, docs/SCROLL-FORMAT.md, and docs/SIGNING.md current; consolidate guidance there instead of accumulating dated notes.

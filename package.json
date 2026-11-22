@@ -1,7 +1,7 @@
 {
   "name": "scrollmind",
   "productName": "ScrollMind",
-  "version": "1.11.0",
+  "version": "2.0.0",
   "description": "A quiet, infinite sheet for your pen display.",
   "private": true,
   "main": "src/main/main.cjs",
