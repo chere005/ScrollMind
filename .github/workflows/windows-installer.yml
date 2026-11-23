@@ -84,15 +84,16 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      GH_TOKEN: ${{ github.token }}
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      # The write token is not persisted into .git/config and is handed only to the release steps, never to npm ci or the tests.
+      # Actions are pinned to commit SHAs.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ format('refs/tags/{0}', env.TAG) }}
-      - uses: actions/setup-node@v5
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: npm
@@ -123,6 +124,8 @@ jobs:
 
       # A published release is never overwritten; a missing Windows file may still be added to it.
       - name: The release for the tag (a draft is created if the Mac has not made one yet)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           states="$(gh api "repos/${GH_REPO}/releases?per_page=100" --paginate --jq ".[] | select(.tag_name == \"${TAG}\") | .draft")"
@@ -163,6 +166,8 @@ jobs:
       # The installer first, its checksum next, the update feed last. --clobber only replaces what an earlier attempt of
       # this run left on the draft; a published release that already has its installer is refused below.
       - name: Upload into the release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           v="${{ steps.version.outputs.version }}"

@@ -10,15 +10,19 @@
 //
 // The guard: the release stays a draft, and the command exits 1, unless the zip, its .sha256 and latest-mac.yml (and,
 // unless --mac-only, the installer, its .sha256 and latest.yml) are all attached with their real sizes and the feeds
-// describe exactly those files. The zip must also be the one Apple accepted and the stapled ticket verified.
-// The macOS files go up zip first and latest-mac.yml last; a published release's assets are never overwritten.
+// describe exactly those files. The zip must also be the one Apple accepted, the stapled ticket verified, and built from
+// the tagged commit's files. Before publishing, the bytes GitHub holds are hashed and must be the local, verified macOS
+// files, and the Windows installer must be the one its .sha256 and latest.yml name.
+// The macOS files go up zip first and latest-mac.yml last (replacing any stale copy on the DRAFT); a published release's
+// assets are never overwritten.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { missingAssets, parseSha256Line, releaseNotes, requiredAssets, verifyFeed, verifyNotarizationRecord } from './release-assets.mjs';
+import { missingAssets, parseFeed, parseSha256Line, releaseNotes, requiredAssets, verifyFeed, verifyNotarizationRecord } from './release-assets.mjs';
 
 const defaultRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runDirectly = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -46,8 +50,18 @@ export function ghBackend(repo, { gh = (args, options) => run('gh', args, option
       return rows[0] ?? null;
     },
     createDraft: (tag, title, notes) => gh(['release', 'create', tag, '--repo', repo, '--draft', '--verify-tag', '--title', title, '--notes-file', '-'], { input: notes }),
-    upload: (tag, file) => gh(['release', 'upload', tag, '--repo', repo, file]),
+    // Only ever called on a draft: --clobber replaces a stale or half-uploaded asset of an earlier attempt.
+    upload: (tag, file) => gh(['release', 'upload', tag, '--repo', repo, '--clobber', file]),
     readAsset: (tag, name) => gh(['release', 'download', tag, '--repo', repo, '--pattern', name, '--output', '-']),
+    /** The SHA-256 (hex) and SHA-512 (base64) of the bytes GitHub holds for one asset. */
+    async hashAsset(tag, name) {
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'scrollmind-asset-'));
+      try {
+        await gh(['release', 'download', tag, '--repo', repo, '--pattern', name, '--dir', directory]);
+        const bytes = await fs.readFile(path.join(directory, name));
+        return { sha256: sha('sha256', bytes, 'hex'), sha512: sha('sha512', bytes, 'base64'), size: bytes.length };
+      } finally { await fs.rm(directory, { recursive: true, force: true }); }
+    },
     publish: (tag) => gh(['release', 'edit', tag, '--repo', repo, '--draft=false', '--latest']),
   };
 }
@@ -71,32 +85,48 @@ export function parseArguments(argv) {
 }
 
 /** The macOS files in dist: they must be the notarized archive, its checksum, and a feed for those bytes. */
-async function readLocalMac({ root, version }) {
+async function readLocalMac({ root, version, tree }) {
   const dist = path.join(root, 'dist');
   const zipName = `ScrollMind-${version}-arm64.zip`;
   const zip = await fs.readFile(path.join(dist, zipName)).catch(() => null);
   if (!zip) throw new Error(`dist/${zipName} is missing. Run npm run release:mac.`);
   const zipSha256 = sha('sha256', zip, 'hex');
-  const checksum = parseSha256Line(await fs.readFile(path.join(dist, `${zipName}.sha256`), 'utf8').catch(() => ''));
+  const checksumText = await fs.readFile(path.join(dist, `${zipName}.sha256`), 'utf8').catch(() => '');
+  const checksum = parseSha256Line(checksumText);
   if (checksum?.name !== zipName || checksum.sha256 !== zipSha256) throw new Error(`dist/${zipName}.sha256 does not match the archive.`);
   const feed = await fs.readFile(path.join(dist, 'latest-mac.yml'), 'utf8').catch(() => '');
-  verifyFeed(feed, { version, file: zipName, sha512: sha('sha512', zip, 'base64'), size: zip.length });
+  const zipSha512 = sha('sha512', zip, 'base64');
+  verifyFeed(feed, { version, file: zipName, sha512: zipSha512, size: zip.length });
   const record = JSON.parse(await fs.readFile(path.join(dist, `ScrollMind-${version}-arm64-notarization.json`), 'utf8').catch(() => 'null'));
-  verifyNotarizationRecord(record, { version, zipName, zipSha256 });
-  return { dist, zipName, files: [zipName, `${zipName}.sha256`, 'latest-mac.yml'] };
+  verifyNotarizationRecord(record, { version, zipName, zipSha256, tree });
+  return {
+    dist, zipName, files: [zipName, `${zipName}.sha256`, 'latest-mac.yml'], zipSha256, zipSha512, size: zip.length,
+    text: { [`${zipName}.sha256`]: checksumText, 'latest-mac.yml': feed },
+  };
 }
 
-/** Once everything is attached, the feeds must describe the sizes GitHub actually holds. */
-async function verifyRemoteFeeds(backend, tag, version, assets, { windows }) {
+/**
+ * Once everything is attached, the bytes GitHub holds must be the files that were verified: the macOS zip, checksum and feed
+ * must equal the local ones (Apple accepted exactly that zip), and the Windows installer must be the file its .sha256 and
+ * latest.yml describe. A stale or replaced asset of an earlier attempt is refused here, never published.
+ */
+async function verifyRemoteFiles(backend, tag, version, assets, mac, { windows }) {
   const size = (name) => assets.find((asset) => asset.name === name)?.size;
-  const pairs = [['latest-mac.yml', `ScrollMind-${version}-arm64.zip`], ...(windows ? [['latest.yml', `ScrollMind-Setup-${version}.exe`]] : [])];
-  for (const [feedName, fileName] of pairs) {
-    const text = await backend.readAsset(tag, feedName);
-    const match = /^ {4}size: (\d+)$/m.exec(text);
-    const named = /^ {2}- url: (\S+)$/m.exec(text)?.[1];
-    if (!match || named !== fileName || Number(match[1]) !== size(fileName)) throw new Error(`${feedName} on the release does not describe ${fileName}.`);
-    if (!new RegExp(`^version: ${version.replace(/\./g, '\\.')}$`, 'm').test(text)) throw new Error(`${feedName} on the release is not for ${version}.`);
+  const zip = await backend.hashAsset(tag, mac.zipName);
+  if (zip.sha256 !== mac.zipSha256 || zip.sha512 !== mac.zipSha512) throw new Error(`${mac.zipName} on the release is not the notarized archive in dist.`);
+  for (const [name, text] of Object.entries(mac.text)) {
+    if ((await backend.readAsset(tag, name)) !== text) throw new Error(`${name} on the release is not the file in dist.`);
   }
+  if (!windows) return;
+  const installer = `ScrollMind-Setup-${version}.exe`;
+  const remote = await backend.hashAsset(tag, installer);
+  if (remote.size !== size(installer)) throw new Error(`${installer} on the release changed while it was checked.`);
+  const checksum = parseSha256Line(await backend.readAsset(tag, `${installer}.sha256`));
+  if (checksum?.name !== installer || checksum.sha256 !== remote.sha256) throw new Error(`${installer}.sha256 on the release does not match the installer.`);
+  let feed;
+  try { feed = parseFeed(await backend.readAsset(tag, 'latest.yml')); } catch { feed = null; }
+  if (!feed || feed.file !== installer || feed.size !== size(installer) || feed.sha512 !== remote.sha512) throw new Error(`latest.yml on the release does not describe ${installer}.`);
+  if (feed.version !== version) throw new Error(`latest.yml on the release is not for ${version}.`);
 }
 
 export async function publishRelease(argv, {
@@ -134,7 +164,8 @@ export async function publishRelease(argv, {
   const head = (await git(['rev-parse', 'HEAD'])).trim();
   if (tagged !== head) throw new Error(`${options.tag} is not the commit checked out here, so dist was not built from it.`);
 
-  const mac = await readLocalMac({ root, version });
+  const tree = (await git(['rev-parse', `refs/tags/${options.tag}^{tree}`])).trim();
+  const mac = await readLocalMac({ root, version, tree });
   if (!release) {
     const annotation = await git(['for-each-ref', `refs/tags/${options.tag}`, '--format=%(contents)']);
     const commitMessage = await git(['log', '-1', '--format=%B', `${options.tag}^{commit}`]);
@@ -146,9 +177,9 @@ export async function publishRelease(argv, {
     if (!release?.draft) throw new Error(`The draft release for ${options.tag} could not be created.`);
   }
 
-  // Zip first, checksum next, the feed last. A file already attached with the right size is kept, never replaced.
+  // Zip first, checksum next, the feed last. The release is a draft, so a copy an earlier attempt left there is replaced
+  // by the verified file in dist (never trusted by its name or size).
   for (const name of mac.files) {
-    if (!missingAssets(release.assets, [name]).length) continue;
     await backend.upload(options.tag, path.join(mac.dist, name));
     log(`Uploaded ${name}`);
   }
@@ -166,7 +197,7 @@ export async function publishRelease(argv, {
     await sleep(30_000);
   }
 
-  await verifyRemoteFeeds(backend, options.tag, version, release.assets, { windows: !options.macOnly });
+  await verifyRemoteFiles(backend, options.tag, version, release.assets, mac, { windows: !options.macOnly });
   await backend.publish(options.tag);
   const after = await backend.findRelease(options.tag);
   const stillMissing = after ? missingAssets(after.assets, wanted) : wanted;

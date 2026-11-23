@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { feedYaml } from '../tools/update-feed.mjs';
 import { ghBackend, parseArguments, publishRelease } from '../tools/publish-release.mjs';
 import { missingAssets, parseFeed, parseSha256Line, releaseNotes, requiredAssets, sha256Line, verifyFeed, verifyNotarizationRecord } from '../tools/release-assets.mjs';
 
 const VERSION = '2.1.0';
 const TAG = `v${VERSION}`;
+const COMMIT = 'a'.repeat(40);
+const TREE = 'b'.repeat(40);
 const hash = (algorithm, data, encoding) => createHash(algorithm).update(data).digest(encoding);
 
 async function fixture({ notarized = true, windows = true } = {}) {
@@ -24,36 +26,48 @@ async function fixture({ notarized = true, windows = true } = {}) {
   await writeFile(join(root, 'dist', 'latest-mac.yml'), feed(VERSION, zipName, zip));
   await writeFile(join(root, 'dist', `ScrollMind-${VERSION}-arm64-notarization.json`), JSON.stringify({
     version: VERSION, status: notarized ? 'Accepted' : 'Signed; not notarized', stapled: notarized, gatekeeperAccepted: notarized,
-    archive: join(root, 'dist', zipName), sha256: hash('sha256', zip, 'hex'),
+    archive: join(root, 'dist', zipName), sha256: hash('sha256', zip, 'hex'), commit: COMMIT, tree: TREE, dirty: false,
   }));
   const exe = Buffer.from('windows installer bytes');
   const winFeed = feed(VERSION, `ScrollMind-Setup-${VERSION}.exe`, exe);
-  return { root, zip, exe, winFeed, macFeed: feed(VERSION, zipName, zip), zipName, windows };
+  const exeSha = sha256Line(hash('sha256', exe, 'hex'), `ScrollMind-Setup-${VERSION}.exe`);
+  return { root, zip, exe, exeSha, winFeed, macFeed: feed(VERSION, zipName, zip), zipName, windows };
 }
 
 /** An in-memory GitHub release: the same calls publish-release.mjs makes through gh. */
-function fakeGithub({ release = null, remoteText = {} } = {}) {
-  const state = { release, uploads: [], published: false, created: 0, texts: remoteText };
+function fakeGithub({ release = null } = {}) {
+  const state = { release, uploads: [], published: false, created: 0, bytes: {} };
+  const put = (name, bytes) => {
+    state.bytes[name] = Buffer.from(bytes);
+    state.release.assets = state.release.assets.filter((asset) => asset.name !== name);
+    state.release.assets.push({ name, size: state.bytes[name].length, state: 'uploaded' });
+  };
   return {
     state,
+    put,
     async findRelease() { return state.release && { draft: state.release.draft, assets: [...state.release.assets] }; },
     async createDraft() { state.created += 1; state.release = { draft: true, assets: [] }; },
     async upload(tag, file) {
-      const name = file.split('/').pop();
-      const bytes = await readFile(file);
+      if (!state.release.draft) throw new Error('A published release is never uploaded to.');
+      const name = basename(file);
       state.uploads.push(name);
-      state.release.assets.push({ name, size: bytes.length, state: 'uploaded' });
-      state.texts[name] = bytes.toString('utf8');
+      put(name, await readFile(file));
     },
-    async readAsset(tag, name) { return state.texts[name]; },
+    async readAsset(tag, name) { return state.bytes[name].toString('utf8'); },
+    async hashAsset(tag, name) { const bytes = state.bytes[name]; return { sha256: hash('sha256', bytes, 'hex'), sha512: hash('sha512', bytes, 'base64'), size: bytes.length }; },
     async publish() { state.published = true; state.release.draft = false; },
   };
 }
 
-const gitFor = (tagged = 'abc', head = 'abc') => async (args) => (args[0] === 'rev-parse' ? (args[1] === 'HEAD' ? head : tagged) : '');
-const addWindows = (github, f, { badFeed = false } = {}) => {
-  github.state.release.assets.push({ name: `ScrollMind-Setup-${VERSION}.exe`, size: f.exe.length }, { name: `ScrollMind-Setup-${VERSION}.exe.sha256`, size: 90 }, { name: 'latest.yml', size: f.winFeed.length });
-  github.state.texts['latest.yml'] = badFeed ? f.winFeed.replace(`size: ${f.exe.length}`, 'size: 1') : f.winFeed;
+const gitFor = (tagged = 'abc', head = 'abc', tree = TREE) => async (args) => {
+  if (args[0] !== 'rev-parse') return '';
+  if (args[1] === 'HEAD') return head;
+  return args[1].endsWith('^{tree}') ? tree : tagged;
+};
+const addWindows = (github, f, { badFeed = false, installer = f.exe } = {}) => {
+  github.put(`ScrollMind-Setup-${VERSION}.exe`, installer);
+  github.put(`ScrollMind-Setup-${VERSION}.exe.sha256`, f.exeSha);
+  github.put('latest.yml', badFeed ? f.winFeed.replace(`size: ${f.exe.length}`, 'size: 1') : f.winFeed);
 };
 
 test('the required files are the zip, its checksum and the feed, then the Windows installer, checksum and feed', () => {
@@ -86,15 +100,20 @@ test('checksum lines round-trip and feeds are checked against the real bytes', (
 });
 
 test('only an Apple-accepted, stapled, Gatekeeper-checked archive counts as notarized', () => {
-  const ok = { version: '1.0.0', status: 'Accepted', stapled: true, gatekeeperAccepted: true, archive: '/d/x.zip', sha256: 'b'.repeat(64) };
-  const subject = { version: '1.0.0', zipName: 'x.zip', zipSha256: 'b'.repeat(64) };
+  const ok = { version: '1.0.0', status: 'Accepted', stapled: true, gatekeeperAccepted: true, archive: '/d/x.zip', sha256: 'b'.repeat(64), commit: COMMIT, tree: TREE, dirty: false };
+  const subject = { version: '1.0.0', zipName: 'x.zip', zipSha256: 'b'.repeat(64), tree: TREE };
   assert.doesNotThrow(() => verifyNotarizationRecord(ok, subject));
+  assert.doesNotThrow(() => verifyNotarizationRecord({ ...ok, archive: 'C:\\d\\x.zip' }, subject), 'a Windows path names the same archive');
+  assert.throws(() => verifyNotarizationRecord({ ...ok, tree: 'c'.repeat(40) }, subject), /different files than the tagged commit/);
+  assert.throws(() => verifyNotarizationRecord({ ...ok, dirty: true }, subject), /committed source/);
+  assert.throws(() => verifyNotarizationRecord({ ...ok, dirty: undefined, commit: undefined, tree: undefined }, subject), /committed source/);
   assert.throws(() => verifyNotarizationRecord(null, subject), /no notarization record/);
   assert.throws(() => verifyNotarizationRecord({ ...ok, status: 'Signed; not notarized' }, subject), /not notarized/);
   assert.throws(() => verifyNotarizationRecord({ ...ok, stapled: false }, subject), /not notarized/);
   assert.throws(() => verifyNotarizationRecord({ ...ok, gatekeeperAccepted: undefined }, subject), /not notarized/);
   assert.throws(() => verifyNotarizationRecord({ ...ok, sha256: 'c'.repeat(64) }, subject), /different archive/);
   assert.throws(() => verifyNotarizationRecord({ ...ok, archive: '/d/other.zip' }, subject), /different archive/);
+  assert.throws(() => verifyNotarizationRecord({ ...ok, archive: '/d/not-x.zip' }, subject), /different archive/);
   assert.throws(() => verifyNotarizationRecord({ ...ok, version: '0.9.0' }, subject), /no notarization record/);
 });
 
@@ -225,7 +244,7 @@ test('a published release is never uploaded to; --check changes nothing and repo
   await rm(f.root, { recursive: true });
 });
 
-test('the gh backend creates drafts, uploads without clobbering, and publishes as Latest', async () => {
+test('the gh backend creates drafts, replaces a stale draft asset when uploading, and publishes as Latest', async () => {
   const calls = [];
   const gh = async (args, options) => {
     calls.push({ args, input: options?.input });
@@ -241,10 +260,63 @@ test('the gh backend creates drafts, uploads without clobbering, and publishes a
   assert.match(flat[0], /^api repos\/o\/r\/releases\?per_page=100 --paginate/);
   assert.match(flat[1], /^release create v2\.1\.0 --repo o\/r --draft --verify-tag/);
   assert.equal(calls[1].input, 'notes');
-  assert.equal(flat[2], 'release upload v2.1.0 --repo o/r /d/x.zip');
-  assert.doesNotMatch(flat[2], /clobber/);
+  assert.equal(flat[2], 'release upload v2.1.0 --repo o/r --clobber /d/x.zip');
   assert.match(flat[3], /release download v2\.1\.0 --repo o\/r --pattern latest\.yml --output -/);
   assert.equal(flat[4], 'release edit v2.1.0 --repo o/r --draft=false --latest');
   const twice = ghBackend('o/r', { gh: async () => '{"draft":true,"assets":[]}\n{"draft":false,"assets":[]}\n' });
   await assert.rejects(twice.findRelease('v2.1.0'), /2 releases exist/);
+});
+
+test('stale same-name files an earlier attempt left on the draft are replaced by the verified ones, never trusted', async () => {
+  const f = await fixture();
+  const github = fakeGithub({ release: { draft: true, assets: [] } });
+  // An earlier attempt: another build's zip (same size would not matter), checksum and feed, plus a Windows installer.
+  const stale = Buffer.from('OLD zip bytes!!!!!!!'.slice(0, f.zip.length).padEnd(f.zip.length, '!'));
+  assert.equal(stale.length, f.zip.length);
+  github.put(f.zipName, stale);
+  github.put(`${f.zipName}.sha256`, sha256Line(hash('sha256', stale, 'hex'), f.zipName));
+  github.put('latest-mac.yml', f.macFeed.replace(/sha512: \S+/g, `sha512: ${hash('sha512', stale, 'base64')}`));
+  addWindows(github, f);
+  const result = await publishRelease([TAG], { root: f.root, backend: github, git: gitFor(), log: () => {} });
+  assert.equal(result.ok, true);
+  assert.deepEqual(github.state.uploads, [f.zipName, `${f.zipName}.sha256`, 'latest-mac.yml']);
+  assert.deepEqual(github.state.bytes[f.zipName], f.zip, 'the draft now holds the notarized archive');
+  assert.equal(github.state.bytes['latest-mac.yml'].toString(), f.macFeed);
+  assert.equal(github.state.published, true);
+  await rm(f.root, { recursive: true });
+});
+
+test('a remote file that differs from the verified local one is refused even when the names and sizes match', async () => {
+  const f = await fixture();
+  const lying = fakeGithub({ release: { draft: true, assets: [] } });
+  addWindows(lying, f);
+  // A backend whose stored zip drifts after the upload (a replaced or corrupted asset of the same size).
+  const upload = lying.upload;
+  lying.upload = async (tag, file) => { await upload(tag, file); if (basename(file) === f.zipName) lying.state.bytes[f.zipName] = Buffer.alloc(f.zip.length, 1); };
+  await assert.rejects(publishRelease([TAG], { root: f.root, backend: lying, git: gitFor(), log: () => {} }), /is not the notarized archive in dist/);
+  assert.equal(lying.state.published, false);
+  await rm(f.root, { recursive: true });
+});
+
+test('a Windows installer that is not the one its checksum and feed name is refused (same size, other bytes)', async () => {
+  const f = await fixture();
+  const other = Buffer.alloc(f.exe.length, 7);
+  const swapped = fakeGithub({ release: { draft: true, assets: [] } });
+  addWindows(swapped, f, { installer: other });
+  await assert.rejects(publishRelease([TAG], { root: f.root, backend: swapped, git: gitFor(), log: () => {} }), /\.exe\.sha256 on the release does not match the installer/);
+  assert.equal(swapped.state.published, false);
+  const rechecked = fakeGithub({ release: { draft: true, assets: [] } });
+  addWindows(rechecked, f, { installer: other });
+  rechecked.put(`ScrollMind-Setup-${VERSION}.exe.sha256`, sha256Line(hash('sha256', other, 'hex'), `ScrollMind-Setup-${VERSION}.exe`));
+  await assert.rejects(publishRelease([TAG], { root: f.root, backend: rechecked, git: gitFor(), log: () => {} }), /latest\.yml on the release does not describe/);
+  assert.equal(rechecked.state.published, false);
+  await rm(f.root, { recursive: true });
+});
+
+test('the archive must have been built from the tagged commit\'s files', async () => {
+  const f = await fixture();
+  const github = fakeGithub();
+  await assert.rejects(publishRelease([TAG, '--mac-only'], { root: f.root, backend: github, git: gitFor('abc', 'abc', 'c'.repeat(40)), log: () => {} }), /different files than the tagged commit/);
+  assert.deepEqual(github.state.uploads, []);
+  await rm(f.root, { recursive: true });
 });

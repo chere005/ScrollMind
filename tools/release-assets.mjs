@@ -3,6 +3,7 @@
 
 const VERSION = /^\d+\.\d+\.\d+$/;
 const HEX64 = /^[0-9a-f]{64}$/;
+const HEX40 = /^[0-9a-f]{40}$/;
 
 /** The sha256sum line for one file: "<hex>  <name>\n". */
 export function sha256Line(sha256, fileName) { return `${sha256}  ${fileName}\n`; }
@@ -55,15 +56,22 @@ export function verifyFeed(text, { version, file, sha512, size }) {
 
 /**
  * The macOS archive may be published as notarized only when Apple accepted it and the ticket is stapled: that is the
- * record tools/release-mac.mjs --notarize writes after it has re-verified the stapled app with Gatekeeper.
+ * record tools/release-mac.mjs writes after it has re-verified the stapled app with Gatekeeper. The record also names the
+ * source tree the app was built from (and says the tracked files were committed), and that must be the tagged commit's
+ * tree, so macOS and Windows users get the same code under one version.
  */
-export function verifyNotarizationRecord(record, { version, zipName, zipSha256 }) {
+export function verifyNotarizationRecord(record, { version, zipName, zipSha256, tree }) {
   if (!record || record.version !== version) throw new Error('There is no notarization record for this version. Run npm run release:mac.');
   if (record.status !== 'Accepted' || record.stapled !== true || record.gatekeeperAccepted !== true) {
     throw new Error(`The macOS archive is not notarized (record says "${record.status}"). Run npm run release:mac, or --resume it.`);
   }
   if (!HEX64.test(record.sha256 ?? '') || record.sha256 !== zipSha256) throw new Error('The notarization record is for a different archive than dist holds. Rebuild and notarize again.');
-  if (!String(record.archive ?? '').endsWith(`/${zipName}`)) throw new Error('The notarization record names a different archive.');
+  // The record may have been written on this Mac (a POSIX path) or compared on another platform: take either separator.
+  if (String(record.archive ?? '').split(/[\\/]/).pop() !== zipName) throw new Error('The notarization record names a different archive.');
+  if (record.dirty !== false || !HEX40.test(record.commit ?? '') || !HEX40.test(record.tree ?? '')) {
+    throw new Error('The notarization record does not say which committed source the archive was built from. Commit, then run npm run release:mac again.');
+  }
+  if (record.tree !== tree) throw new Error('The archive in dist was built from different files than the tagged commit holds. Rebuild and notarize from the commit you tag.');
 }
 
 /** Release notes: the tag's annotation without trailer lines, else the tagged commit's message, else a one-liner. */

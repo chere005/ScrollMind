@@ -16,8 +16,8 @@ if (options.has('--sign-only') && (options.has('--notarize') || options.has('--r
 // A release is notarized (npm run release:mac); signing alone is for a scratch build (--sign-only), and --notarize is kept as a spelling of the default.
 const signOnly = options.has('--sign-only');
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
-const architecture = process.arch;
-const app = path.join(root, 'dist', architecture === 'arm64' ? 'mac-arm64' : 'mac', 'ScrollMind.app');
+const architecture = 'arm64'; // macOS builds are Apple silicon only (verifySigningConfiguration refuses an Intel or Rosetta node)
+const app = path.join(root, 'dist', 'mac-arm64', 'ScrollMind.app');
 const artifactBase = path.join(root, 'dist', `ScrollMind-${pkg.version}-${architecture}`);
 const uploadZip = `${artifactBase}-signed.zip`;
 const releaseZip = `${artifactBase}.zip`;
@@ -82,12 +82,17 @@ async function verifyCredentials(args) {
     const stat = await fs.stat(args[keyIndex + 1]).catch(() => null);
     if (!stat?.isFile()) throw new Error('The notarization API key must be an existing private-key file. Inline secrets are not accepted.');
   }
-  await command('xcrun', ['notarytool', 'history', ...args, '--output-format', 'json'], { timeout: 45_000 });
+  try {
+    await command('xcrun', ['notarytool', 'history', ...args, '--output-format', 'json'], { timeout: 45_000 });
+  } catch (error) {
+    throw new Error(`${error.message}\nNotarization credentials ${args.join(' ')} did not resolve in this shell. Store the profile with notarytool store-credentials, or point at another with APPLE_KEYCHAIN_PROFILE (and APPLE_KEYCHAIN for a non-default keychain), or use an App Store Connect API key (docs/SIGNING.md).`);
+  }
   console.log('Notarization credentials verified.');
 }
 
 async function verifySigningConfiguration() {
   if (process.platform !== 'darwin') throw new Error('macOS signing and notarization must run on macOS.');
+  if (process.arch !== 'arm64') throw new Error('macOS releases are Apple silicon only: run this with an arm64 node, not an Intel or Rosetta one.');
   const mac = pkg.build?.mac;
   if (!mac?.identity || mac.identity === '-' || mac.identity.startsWith('Developer ID Application:')) throw new Error('Set a Developer ID identity qualifier without its certificate-type prefix.');
   if (!pkg.build.forceCodeSigning || mac.hardenedRuntime !== true || mac.notarize !== false) throw new Error('Release builds require forceCodeSigning, Hardened Runtime, and explicit notarization through this script.');
@@ -104,7 +109,14 @@ async function verifySigningConfiguration() {
   return team;
 }
 
+/** Every Mach-O we ship must be exactly arm64: an Intel or universal build is never released. */
+async function verifyArchitecture(file) {
+  const archs = (await command('lipo', ['-archs', file])).stdout.trim();
+  if (archs !== 'arm64') throw new Error(`${path.relative(app, file)} is built for "${archs}", not arm64 only.`);
+}
+
 async function verifySignedApp(team) {
+  await verifyArchitecture(path.join(app, 'Contents', 'MacOS', 'ScrollMind'));
   await command('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);
   const result = await command('codesign', ['--display', '--verbose=4', app]);
   const details = result.stdout + result.stderr;
@@ -130,6 +142,7 @@ async function verifyPenHelper(team) {
   const helper = path.join(app, 'Contents', 'Resources', 'scroll-pen');
   const stat = await fs.stat(helper).catch(() => null);
   if (!stat?.isFile() || !(stat.mode & 0o111)) throw new Error('The packaged app has no executable scroll-pen helper. Run npm run build:pen.');
+  await verifyArchitecture(helper);
   await command('codesign', ['--verify', '--strict', helper]);
   const details = (await command('codesign', ['--display', '--verbose=4', helper])).stderr;
   if (!details.includes('Authority=Developer ID Application:') || !details.includes(`TeamIdentifier=${team}`) || !/flags=.*\(.*runtime/.test(details)) throw new Error('The packaged scroll-pen helper is not signed with the Developer ID and Hardened Runtime.');
@@ -155,6 +168,12 @@ async function archive(destination) {
   } finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
 }
 
+/** The committed source a release is built from. A release must come from a clean tracked tree so the tag can name it. */
+async function sourceState() {
+  const git = async (...args) => (await command('git', args)).stdout.trim();
+  return { commit: await git('rev-parse', 'HEAD'), tree: await git('rev-parse', 'HEAD^{tree}'), dirty: Boolean(await git('status', '--porcelain', '--untracked-files=no')) };
+}
+
 async function notarizationStatus(id, args) {
   const result = await command('xcrun', ['notarytool', 'info', id, ...args, '--output-format', 'json'], { timeout: 45_000 });
   return JSON.parse(result.stdout);
@@ -168,9 +187,12 @@ async function main() {
   if (options.has('--check')) return;
   await fs.mkdir(path.join(root, 'dist'), { recursive: true });
   let state;
+  const source = await sourceState();
+  if (!signOnly && source.dirty) throw new Error('Tracked files have uncommitted changes. Commit them first: a release is built from the commit that gets tagged.');
   if (options.has('--resume')) {
     state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
     if (state.version !== pkg.version || state.uploadSha256 !== await sha256(uploadZip)) throw new Error('The saved signing or notarization record does not match this release archive.');
+    if (state.tree !== source.tree) throw new Error('The files checked out are not the ones this archive was built from. Check out that commit, or build again.');
   } else {
     console.log(`Building signed ScrollMind ${pkg.version} (${architecture}).`);
     await command(process.execPath, [path.join(root, 'node_modules', 'electron-builder', 'cli.js'), '--mac', '--dir', `--${architecture}`, '--publish', 'never'], {
@@ -192,7 +214,7 @@ async function main() {
     const result = await command('xcrun', ['notarytool', 'submit', uploadZip, ...auth, '--output-format', 'json'], { timeout: 10 * 60_000 });
     const submitted = JSON.parse(result.stdout);
     if (!submitted.id) throw new Error('Apple did not return a notarization submission ID.');
-    state = { version: pkg.version, team, id: submitted.id, status: submitted.status || 'In Progress', app, uploadArchive: uploadZip, uploadSha256: await sha256(uploadZip), submittedAt: new Date().toISOString() };
+    state = { version: pkg.version, team, ...source, id: submitted.id, status: submitted.status || 'In Progress', app, uploadArchive: uploadZip, uploadSha256: await sha256(uploadZip), submittedAt: new Date().toISOString() };
     await writeState(state);
     console.log(`Notarization submitted: ${state.id}`);
   }
@@ -211,6 +233,8 @@ async function main() {
     }
     await delay(15_000);
   }
+  const after = await sourceState();
+  if (after.dirty || after.tree !== state.tree) throw new Error('The checked-out files changed while the app was built and notarized. Check out the build commit, or build again.');
   await command('xcrun', ['stapler', 'staple', app], { timeout: 120_000 });
   await verifyNotarizedApp(team);
   await archive(releaseZip);
