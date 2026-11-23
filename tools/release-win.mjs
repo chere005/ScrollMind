@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { writeFeed, verifyAppFeed } from './update-feed.mjs';
+import { sha256Line } from './release-assets.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -14,7 +15,8 @@ const runDirectly = Boolean(process.argv[1]) && path.resolve(process.argv[1]) ==
 const options = new Set(runDirectly ? process.argv.slice(2) : []);
 if (runDirectly) {
   for (const option of options) if (option !== '--check') throw new Error(`Unknown release option: ${option}`);
-  if (process.platform !== 'win32') throw new Error('Windows release builds must run on Windows.');
+  // Builds run on a Windows machine (the windows-installer workflow's runner); only --check may run anywhere.
+  if (process.platform !== 'win32' && !options.has('--check')) throw new Error('Windows release builds must run on Windows (the windows-installer workflow).');
 }
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
 const dist = path.join(root, 'dist');
@@ -57,7 +59,7 @@ async function writeAtomic(file, text) {
   await renameWithRetry(temporary, file);
 }
 
-export function sha256Line(sha256, fileName) { return `${sha256}  ${fileName}\n`; }
+export { sha256Line };
 
 export function verifyPackagedVersion(packaged, expected) {
   if (packaged?.version !== expected?.version || packaged?.name !== expected?.name) throw new Error('The packaged app version does not match package.json.');

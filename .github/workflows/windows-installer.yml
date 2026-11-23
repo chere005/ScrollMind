@@ -1,0 +1,217 @@
+# The Windows installer for a ScrollMind release tag, built on a GitHub windows-latest runner (Windows installers cannot be
+# built on the Mac that builds, signs and notarizes the macOS archive). Pushing a tag v<major>.<minor>.<patch>, or running
+# this workflow by hand for an existing tag, attaches three files to that tag's DRAFT release:
+#
+#   ScrollMind-Setup-<version>.exe, ScrollMind-Setup-<version>.exe.sha256, then latest.yml (the Windows update feed) last.
+#
+# The installer is NOT Authenticode signed (the owner chose to skip a certificate): nothing here signs it or checks for a
+# signature. Windows updates are protected by HTTPS and the SHA-512 in latest.yml. The release is published by
+# `node tools/publish-release.mjs <tag>` on the Mac (docs/SIGNING.md), only once the macOS and Windows files are all there.
+#
+# QUIET CI (AgentSuite/ci.md; `python3 ~/GIT/AgentSuite/tools/check-workflows.py .` checks it): a run a person starts only
+# hands off to github-actions[bot]; every real job runs only in the bot's run and is continue-on-error; nothing is cancelled;
+# a run that ends with a file missing dispatches itself again (input attempt, at most 3 runs). Retry by hand with
+#   gh workflow run windows-installer.yml --ref <tag> -f tag=<tag>      (never `gh run rerun`)
+name: Windows installer
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "An existing tag to build, e.g. v2.1.0 (it must be the version in package.json)"
+        required: true
+        type: string
+      attempt:
+        description: "Set by the workflow when it retries a missing file (1 = the first run)"
+        required: false
+        default: "1"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.triggering_actor != 'github-actions[bot]' && format('handoff-{0}', github.run_id) || format('windows-{0}', inputs.tag || github.ref_name) }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  handoff:
+    name: Hand off to the bot
+    if: github.triggering_actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUTS: ${{ toJSON(inputs) }}
+      PUSH_INPUTS: ${{ github.ref_type == 'tag' && format('{{"tag":"{0}"}}', github.ref_name) || '{}' }}
+    steps:
+      - name: Dispatch this workflow as github-actions[bot]
+        shell: bash
+        run: |
+          set -euo pipefail
+          wf="${GITHUB_WORKFLOW_REF%%@*}"; wf="${wf##*/}"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then json="$INPUTS"; else json="$PUSH_INPUTS"; fi
+          [ -n "$json" ] && [ "$json" != null ] || json='{}'
+          json=$(jq -c 'with_entries(select(.value != null) | .value |= tostring)' <<< "$json")
+          echo "dispatching $wf at $GITHUB_REF_NAME with $json"
+          for i in 1 2 3 4 5; do
+            if gh workflow run "$wf" --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --json <<< "$json"; then
+              echo "### Handed off to github-actions[bot]" >> "$GITHUB_STEP_SUMMARY"
+              echo "The work runs in the bot's run of $wf on $GITHUB_REF_NAME (Actions tab)." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep $((i * 10))
+          done
+          echo "::error title=Handoff failed::could not dispatch $wf; nothing was built"
+          exit 1
+
+  windows:
+    name: windows installer
+    if: github.triggering_actor == 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ format('refs/tags/{0}', env.TAG) }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: The tag is the app's version
+        id: version
+        run: |
+          set -euo pipefail
+          read -r pkg lock lockroot < <(node -e '
+            const fs = require("fs");
+            const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"));
+            const lock = read("package-lock.json");
+            console.log(read("package.json").version, lock.version, lock.packages?.[""]?.version);
+          ')
+          if [ "$pkg" != "$lock" ] || [ "$pkg" != "$lockroot" ]; then
+            echo "::error title=Version files differ::package.json says $pkg, package-lock.json says $lock ($lockroot for the root package)."
+            exit 1
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error title=Not a version tag::'$TAG' is not v<major>.<minor>.<patch>."
+            exit 1
+          fi
+          if [ "$TAG" != "v$pkg" ]; then
+            echo "::error title=Tag and version differ::The tag is $TAG but package.json says $pkg."
+            exit 1
+          fi
+          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+
+      # A published release is never overwritten; a missing Windows file may still be added to it.
+      - name: The release for the tag (a draft is created if the Mac has not made one yet)
+        run: |
+          set -euo pipefail
+          states="$(gh api "repos/${GH_REPO}/releases?per_page=100" --paginate --jq ".[] | select(.tag_name == \"${TAG}\") | .draft")"
+          count="$(printf '%s\n' "$states" | grep -c . || true)"
+          if [ "$count" -gt 1 ]; then
+            echo "::error title=Two releases::${count} releases exist for ${TAG}; delete all but one on the Releases page."
+            exit 1
+          fi
+          if [ "$count" -eq 0 ]; then
+            git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+            drop='^(Co-Authored-By|Signed-off-by):'
+            notes=""
+            if [ "$(git cat-file -t "refs/tags/${TAG}")" = "tag" ]; then
+              notes="$(git for-each-ref "refs/tags/${TAG}" --format='%(contents)' | grep -ivE "$drop" || true)"
+            fi
+            if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+              notes="$(git log -1 --format=%B "${TAG}^{commit}" | grep -ivE "$drop" || true)"
+            fi
+            if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then notes="ScrollMind ${TAG#v}"; fi
+            printf '%s\n' "$notes" > "$RUNNER_TEMP/notes.md"
+            gh release create "$TAG" --draft --verify-tag --title "ScrollMind ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md" || true
+          fi
+
+      - run: npm ci
+      - name: Configuration check
+        run: node tools/release-win.mjs --check
+      # The Mac ran the full preflight (including the desktop UI suite) before the tag; the unit tests run again here.
+      - run: npm test
+      - name: Build the installer
+        run: node tools/release-win.mjs
+      - name: Files for the release
+        run: |
+          set -euo pipefail
+          ls -l dist
+          for f in "ScrollMind-Setup-${{ steps.version.outputs.version }}.exe" "ScrollMind-Setup-${{ steps.version.outputs.version }}.exe.sha256" latest.yml; do
+            test -s "dist/$f"
+          done
+      # The installer first, its checksum next, the update feed last. --clobber only replaces what an earlier attempt of
+      # this run left on the draft; a published release that already has its installer is refused below.
+      - name: Upload into the release
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          have="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          if printf '%s\n' "$have" | grep -Fxq "ScrollMind-Setup-${v}.exe" && [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != true ]; then
+            echo "::error title=Already published::${TAG} is published with its installer; it is never overwritten."
+            exit 1
+          fi
+          gh release upload "$TAG" "dist/ScrollMind-Setup-${v}.exe" "dist/ScrollMind-Setup-${v}.exe.sha256" --clobber
+          gh release upload "$TAG" dist/latest.yml --clobber
+
+  # always(): a Windows runner GitHub never gave must not skip this. Missing files are retried by dispatching again.
+  finish:
+    name: finish
+    if: ${{ always() && github.triggering_actor == 'github-actions[bot]' }}
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ATTEMPT: ${{ inputs.attempt || '1' }}
+      MAX_ATTEMPTS: "3"
+    steps:
+      - name: The three Windows files are attached, or run again
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          have="$(gh release view "$TAG" --json assets --jq '.assets[] | select(.size > 0) | .name' || true)"
+          missing=""
+          for f in "ScrollMind-Setup-${version}.exe" "ScrollMind-Setup-${version}.exe.sha256" latest.yml; do
+            printf '%s\n' "$have" | grep -Fxq "$f" || missing="$missing $f"
+          done
+          if [ -z "$missing" ]; then
+            echo "### ${TAG}: the Windows installer is attached" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "Missing:${missing}"
+          wf="${GITHUB_WORKFLOW_REF%%@*}"; wf="${wf##*/}"
+          if [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; then
+            next=$((ATTEMPT + 1))
+            gh workflow run "$wf" --repo "$GITHUB_REPOSITORY" --ref "$TAG" -f "tag=$TAG" -f "attempt=$next"
+            echo "### Run $ATTEMPT of $MAX_ATTEMPTS left${missing} missing; run $next builds again" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ${TAG} still lacks${missing} after ${MAX_ATTEMPTS} runs; publish-release.mjs will not publish it" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Windows installer incomplete::${TAG} lacks${missing} after ${MAX_ATTEMPTS} runs."
+            exit 1
+          fi

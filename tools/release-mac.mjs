@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { writeFeed, verifyAppFeed } from './update-feed.mjs';
+import { sha256Line } from './release-assets.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const options = new Set(process.argv.slice(2));
 const allowed = new Set(['--check', '--sign-only', '--notarize', '--resume', '--verify']);
 for (const option of options) if (!allowed.has(option)) throw new Error(`Unknown release option: ${option}`);
 if (options.has('--sign-only') && (options.has('--notarize') || options.has('--resume'))) throw new Error('Choose signing only or explicitly opt into notarization.');
-const signOnly = options.has('--sign-only') || (!options.has('--notarize') && !options.has('--resume'));
+// A release is notarized (npm run release:mac); signing alone is for a scratch build (--sign-only), and --notarize is kept as a spelling of the default.
+const signOnly = options.has('--sign-only');
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
 const architecture = process.arch;
 const app = path.join(root, 'dist', architecture === 'arm64' ? 'mac-arm64' : 'mac', 'ScrollMind.app');
@@ -48,8 +50,19 @@ async function writeState(value) {
 
 async function sha256(file) { return createHash('sha256').update(await fs.readFile(file)).digest('hex'); }
 
+/** The checksum file that is published beside the archive, in sha256sum format. */
+async function writeChecksum(file) {
+  const temporary = `${file}.sha256.tmp`;
+  await fs.writeFile(temporary, sha256Line(await sha256(file), path.basename(file)));
+  await fs.rename(temporary, `${file}.sha256`);
+}
+
+// Every MindSuite app notarizes with the same notarytool keychain profile on this Mac.
+const DEFAULT_NOTARY_PROFILE = 'DisplayMind';
+
 function credentials() {
-  const profile = process.env.APPLE_KEYCHAIN_PROFILE || process.env.SCROLLMIND_NOTARY_PROFILE;
+  const apiKey = process.env.APPLE_API_KEY || process.env.SCROLLMIND_NOTARY_KEY;
+  const profile = process.env.APPLE_KEYCHAIN_PROFILE || process.env.SCROLLMIND_NOTARY_PROFILE || (apiKey ? '' : DEFAULT_NOTARY_PROFILE);
   if (profile) {
     const args = ['--keychain-profile', profile];
     if (process.env.APPLE_KEYCHAIN) args.push('--keychain', process.env.APPLE_KEYCHAIN);
@@ -170,6 +183,7 @@ async function main() {
   if (!options.has('--resume')) await archive(uploadZip);
   if (signOnly) {
     await writeFeed(feedFile, { version: pkg.version, file: uploadZip });
+    await writeChecksum(uploadZip);
     await writeState({ version: pkg.version, team, status: 'Signed; not notarized', app, archive: uploadZip, feed: feedFile, uploadSha256: await sha256(uploadZip) });
     console.log(`Signed app and archive ready: ${app}; ${uploadZip}; update feed ${feedFile}`);
     return;
@@ -201,6 +215,7 @@ async function main() {
   await verifyNotarizedApp(team);
   await archive(releaseZip);
   await writeFeed(feedFile, { version: pkg.version, file: releaseZip });
+  await writeChecksum(releaseZip);
   await writeState({ ...state, status: 'Accepted', stapled: true, gatekeeperAccepted: true, archive: releaseZip, feed: feedFile, sha256: await sha256(releaseZip), verifiedAt: new Date().toISOString() });
   console.log(`Signed, notarized, stapled app and ZIP ready: ${app}; ${releaseZip}`);
 }

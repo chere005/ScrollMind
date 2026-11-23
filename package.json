@@ -16,6 +16,7 @@
     "build:mac": "npm run build:pen && electron-builder --mac --dir",
     "release:mac": "npm run build:pen && npm run preflight && node tools/release-mac.mjs",
     "release:win": "node tools/release-win.mjs --check && npm run preflight && node tools/release-win.mjs",
+    "publish:release": "node tools/publish-release.mjs",
     "build:win": "electron-builder --win",
     "build:win:dir": "electron-builder --win --dir"
   },
