@@ -8,17 +8,17 @@ The current download requires **macOS 13 or later on Apple silicon (M1 or newer)
 
 Download the arm64 ZIP from the [latest release](https://github.com/chere005/ScrollMind/releases/latest), unzip it, and move **ScrollMind.app** to **Applications**.
 
-The app is Developer ID signed and **not notarized**. If macOS blocks the first launch, see [Apple's instructions for opening downloaded apps](https://support.apple.com/en-us/102445).
+Releases are Developer ID signed and **notarized by Apple**, so macOS opens them without a warning. (Versions up to 2.0.0 were signed but not notarized; if macOS blocks one of those on first launch, see [Apple's instructions for opening downloaded apps](https://support.apple.com/en-us/102445).)
 
 ### Updates
 
-ScrollMind checks the GitHub releases a few seconds after it opens and every 12 hours. It asks before it downloads a newer version, then asks again before restarting; your writing is saved first, and **Later** installs the update the next time you quit. On macOS, **ScrollMind ▸ Check for Updates…** asks at any time. A copy opened from a disk image or from outside Applications does not update itself.
+ScrollMind checks the GitHub releases a few seconds after it opens and every 12 hours, on macOS and on Windows. It asks before it downloads a newer version, then asks again before restarting; your writing is saved first, and **Later** installs the update the next time you quit. On macOS, **ScrollMind ▸ Check for Updates…** asks at any time. A copy opened from a disk image or from outside Applications does not update itself.
 
 ### Windows
 
-The Windows version requires **Windows 10 or later (x64)**. Run **ScrollMind-Setup-<version>.exe**, the Windows installer published with a release or built locally with `npm run build:win`. It installs for the current user and needs no administrator rights. Open .sm files in Explorer with ScrollMind.
+The Windows version requires **Windows 10 or later (x64)**. Run **ScrollMind-Setup-<version>.exe**, the Windows installer attached to every release (a GitHub Actions workflow builds it from the release tag). It installs for the current user and needs no administrator rights. Open .sm files in Explorer with ScrollMind.
 
-The installer is **unsigned**. If SmartScreen blocks it, choose **More info**, then **Run anyway**.
+The installer is **not code signed**. If SmartScreen blocks it, choose **More info**, then **Run anyway**. Updates the app downloads itself are checked against the SHA-512 in the release's `latest.yml` and do not show that warning.
 
 ## Write and arrange
 
@@ -48,4 +48,4 @@ See the [pen buttons](docs/PEN-BUTTONS.md) for exactly what each side button of 
 
 Use a Node.js version with `node:sqlite` support. Install dependencies with `npm ci`, run locally with `npm start`, and check changes with `npm run preflight`. UI tests run in hidden windows with temporary data.
 
-The drawing model is separate from the desktop shell. `npm run build:win` creates the unsigned Windows installer in `dist/`, `npm run build:win:dir` an unpacked app, and `npm run release:win` a verified installer with its SHA-256 checksum. See [distribution](docs/SIGNING.md) for signed macOS builds and the Windows installer.
+The drawing model is separate from the desktop shell. `npm run build:win` creates the unsigned Windows installer in `dist/`, `npm run build:win:dir` an unpacked app, and `npm run release:win` a verified installer with its SHA-256 checksum. See [distribution](docs/SIGNING.md) for the notarized macOS build, the Windows installer workflow, and publishing a release.
