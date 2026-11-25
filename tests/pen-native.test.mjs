@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
+import { join } from 'node:path';
 import { PenInput } from '../src/core/pen-input.mjs';
 import { PenButtonShortcuts } from '../src/core/pen-shortcuts.mjs';
 
@@ -21,8 +22,8 @@ test('helper lines become switch states and nothing else does', () => {
 
 test('the helper is looked for beside the packaged app or in build/bin, and only on a Mac', () => {
 	const present = () => true, absent = () => false;
-	assert.equal(helperPath({ packaged: true, resourcesPath: '/App/Contents/Resources', root: '/src', platform: 'darwin', exists: present }), '/App/Contents/Resources/scroll-pen');
-	assert.equal(helperPath({ packaged: false, resourcesPath: '/x', root: '/src', platform: 'darwin', exists: present }), '/src/build/bin/scroll-pen');
+	assert.equal(helperPath({ packaged: true, resourcesPath: '/App/Contents/Resources', root: '/src', platform: 'darwin', exists: present }), join('/App/Contents/Resources', 'scroll-pen'));
+	assert.equal(helperPath({ packaged: false, resourcesPath: '/x', root: '/src', platform: 'darwin', exists: present }), join('/src', 'build', 'bin', 'scroll-pen'));
 	assert.equal(helperPath({ packaged: true, resourcesPath: '/x', root: '/src', platform: 'darwin', exists: absent }), null);
 	assert.equal(helperPath({ packaged: true, resourcesPath: '/x', root: '/src', platform: 'win32', exists: present }), null);
 	assert.equal(helperPath({ packaged: true, resourcesPath: '/x', root: '/src', platform: 'linux', exists: present }), null);
