@@ -4,7 +4,7 @@ Full-screen handwriting for Wacom pen displays, with an infinite vertical scroll
 
 ## Download and install
 
-The current download requires **macOS 13 or later on Apple silicon (M1 or newer)**.
+The macOS download requires **macOS 13 or later on Apple silicon (M1 or newer)**.
 
 Download the arm64 ZIP from the [latest release](https://github.com/chere005/ScrollMind/releases/latest), unzip it, and move **ScrollMind.app** to **Applications**.
 
